@@ -57,7 +57,7 @@ import { commandBody, commandProfile } from "./commands/user.mjs";
 let ACTIVE_TIME_ZONE = normalizeTimeZone();
 
 function printGlobalHelp() {
-  console.log("whoop-cli (unofficial)");
+  console.log("whoop-query-cli (unofficial)");
   console.log("");
   console.log("Commands:");
   for (const [name, def] of Object.entries(COMMANDS)) {
@@ -147,14 +147,14 @@ function getFlagSuggestions(input, allowedFlags, max = 3) {
 
 function formatUnknownCommandMessage(input) {
   const suggestions = getCommandSuggestions(input);
-  const lines = [`unknown command "${input}" for "whoop-cli"`];
+  const lines = [`unknown command "${input}" for "whoop-query-cli"`];
   if (suggestions.length === 1) {
     lines.push("", "Did you mean this?", `  ${suggestions[0]}`);
   } else if (suggestions.length > 1) {
     lines.push("", "Did you mean one of these?");
     for (const suggestion of suggestions) lines.push(`  ${suggestion}`);
   }
-  lines.push("", 'Run "whoop-cli help" for available commands.');
+  lines.push("", 'Run "whoop-query-cli help" for available commands.');
   return lines.join("\n");
 }
 
@@ -162,7 +162,7 @@ function formatUnknownFlagMessage(command, unknownFlags, allowedFlags) {
   const flags = Array.isArray(unknownFlags) ? unknownFlags : [unknownFlags];
   const normalizedAllowed = Array.from(new Set((allowedFlags ?? []).map((flag) => String(flag)))).sort();
   const lines = [
-    `unknown flag${flags.length > 1 ? "s" : ""} for "whoop-cli ${command}": ${flags.map((flag) => `--${flag}`).join(", ")}`,
+    `unknown flag${flags.length > 1 ? "s" : ""} for "whoop-query-cli ${command}": ${flags.map((flag) => `--${flag}`).join(", ")}`,
   ];
 
   for (const flag of flags) {
@@ -181,7 +181,7 @@ function formatUnknownFlagMessage(command, unknownFlags, allowedFlags) {
     lines.push("", "Allowed flags: none");
   }
 
-  const helpCommand = command === "help" ? "whoop-cli help" : `whoop-cli help ${command}`;
+  const helpCommand = command === "help" ? "whoop-query-cli help" : `whoop-query-cli help ${command}`;
   lines.push("", `Run "${helpCommand}" for usage.`);
   return lines.join("\n");
 }
@@ -215,7 +215,7 @@ function printCommandHelp(command, flags = {}) {
     return 0;
   }
 
-  console.log(`whoop-cli ${command} (unofficial)`);
+  console.log(`whoop-query-cli ${command} (unofficial)`);
   console.log("");
   console.log(def.summary);
   console.log(PROJECT_NOTICE);
@@ -525,8 +525,8 @@ main().catch((error) => {
   }
 
   if (message.includes("No access token found")) {
-    console.error("Tip: run whoop-cli login, approve app access, then run whoop-cli exchange-code --code <authorization_code>.");
-    console.error("Tip: for one-step local auth, use whoop-cli login-local --open with a localhost redirect URI.");
+    console.error("Tip: run whoop-query-cli login, approve app access, then run whoop-query-cli exchange-code --code <authorization_code>.");
+    console.error("Tip: for one-step local auth, use whoop-query-cli login-local --open with a localhost redirect URI.");
   }
   if (message.includes("Missing WHOOP client ID")) {
     console.error("Tip: set WHOOP_CLIENT_ID or pass --client-id.");
@@ -546,7 +546,7 @@ main().catch((error) => {
   if (message.includes("Invalid timezone \"")) {
     console.error("Tip: use an IANA timezone like America/New_York.");
   }
-  console.error('Run "whoop-cli help" or "whoop-cli help <command>" for usage.');
+  console.error('Run "whoop-query-cli help" or "whoop-query-cli help <command>" for usage.');
 
   if (process.env.WHOOP_CLI_DEBUG === "1" && error?.stack) {
     console.error("");

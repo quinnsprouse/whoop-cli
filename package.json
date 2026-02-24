@@ -1,11 +1,11 @@
 {
-  "name": "@quinnsprouse/whoop-cli",
+  "name": "whoop-query-cli",
   "version": "0.1.0",
   "description": "Unofficial CLI for authenticating with WHOOP and querying v2 user data",
   "main": "src/cli.mjs",
   "bin": {
-    "whoop-cli": "src/cli.mjs",
-    "wcli": "src/cli.mjs"
+    "whoop-query-cli": "src/cli.mjs",
+    "wqcli": "src/cli.mjs"
   },
   "files": [
     "src",

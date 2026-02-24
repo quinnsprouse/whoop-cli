@@ -92,7 +92,7 @@ function getLocalCallbackConfig(redirectUriValue) {
 function renderCallbackHtml(title, message) {
   return [
     "<!doctype html>",
-    "<html><head><meta charset=\"utf-8\"><title>whoop-cli</title></head>",
+    "<html><head><meta charset=\"utf-8\"><title>whoop-query-cli</title></head>",
     "<body style=\"font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; padding: 24px;\">",
     `<h2>${title}</h2>`,
     `<p>${message}</p>`,
@@ -211,7 +211,7 @@ export async function commandLoginUrl(flags, deps) {
     instructions: [
       "1) Open authorizationUrl in your browser and approve access.",
       "2) Copy the code query parameter from your redirect URL.",
-      "3) Run: whoop-cli exchange-code --code <authorization_code>",
+      "3) Run: whoop-query-cli exchange-code --code <authorization_code>",
     ],
     ...openResult,
   };

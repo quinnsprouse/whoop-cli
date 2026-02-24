@@ -6,7 +6,7 @@ const WHOOP_BASE_URL = "https://api.prod.whoop.com";
 const WHOOP_DEVELOPER_BASE_URL = `${WHOOP_BASE_URL}/developer`;
 const WHOOP_AUTHORIZATION_URL = `${WHOOP_BASE_URL}/oauth/oauth2/auth`;
 const WHOOP_TOKEN_URL = `${WHOOP_BASE_URL}/oauth/oauth2/token`;
-const DEFAULT_USER_AGENT = "whoop-cli/0.1 (unofficial; personal data export; +https://developer.whoop.com)";
+const DEFAULT_USER_AGENT = "whoop-query-cli/0.1 (unofficial; personal data export; +https://developer.whoop.com)";
 const DEFAULT_SCOPES = [
   "read:profile",
   "read:body_measurement",
@@ -410,7 +410,7 @@ export class WhoopClient {
     const token = this.session.tokens;
     if (!token?.access_token) {
       throw new Error(
-        "No access token found. Run whoop-cli login and whoop-cli exchange-code to authenticate.",
+        "No access token found. Run whoop-query-cli login and whoop-query-cli exchange-code to authenticate.",
       );
     }
 

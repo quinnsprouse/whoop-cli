@@ -1,4 +1,4 @@
-# Unofficial WHOOP CLI
+# Unofficial WHOOP Query CLI
 
 > Unofficial tool. Not affiliated with or endorsed by WHOOP.
 
@@ -17,14 +17,14 @@ CLI to authenticate with the official WHOOP API and query your account data, inc
 ### Run without install (npx)
 
 ```bash
-npx --yes @quinnsprouse/whoop-cli help
+npx --yes whoop-query-cli help
 ```
 
 ### Global install
 
 ```bash
-npm install -g @quinnsprouse/whoop-cli
-whoop-cli help
+npm install -g whoop-query-cli
+whoop-query-cli help
 ```
 
 ### Local development (from source)
@@ -42,17 +42,10 @@ npm run help
 node src/cli.mjs help
 ```
 
-### Optional global command (from local source)
-
-```bash
-npm link
-whoop-cli help
-```
-
 ## WHOOP App Setup (Developer Dashboard)
 
 1. Create a WHOOP app in the dashboard.
-2. Set Privacy Policy URL (for this repo):
+2. Set Privacy Policy URL:
    - `https://github.com/quinnsprouse/whoop-cli/blob/main/PRIVACY.md`
 3. Add Redirect URL(s):
    - `http://localhost:8787/callback` (recommended for `login-local`)
@@ -84,35 +77,35 @@ Optional:
 1. Authenticate (recommended)
 
 ```bash
-whoop-cli login-local --open
+whoop-query-cli login-local --open
 ```
 
 2. Query data
 
 ```bash
-whoop-cli whoami --json
-whoop-cli workouts --days 14 --json
-whoop-cli recoveries --days 30 --max-recovery 50 --json
-whoop-cli sleep --days 14 --json
-whoop-cli day --date 2026-02-24 --include-records --json
+whoop-query-cli whoami --json
+whoop-query-cli workouts --days 14 --json
+whoop-query-cli recoveries --days 30 --max-recovery 50 --json
+whoop-query-cli sleep --days 14 --json
+whoop-query-cli day --date 2026-02-24 --include-records --json
 ```
 
 3. Query endpoint-specific records
 
 ```bash
-whoop-cli sleep-by-id --sleep-id <uuid> --json
-whoop-cli workout-by-id --workout-id <uuid> --json
-whoop-cli cycle-recovery --cycle-id <int> --json
-whoop-cli cycle-sleep --cycle-id <int> --json
+whoop-query-cli sleep-by-id --sleep-id <uuid> --json
+whoop-query-cli workout-by-id --workout-id <uuid> --json
+whoop-query-cli cycle-recovery --cycle-id <int> --json
+whoop-query-cli cycle-sleep --cycle-id <int> --json
 ```
 
 4. Discover commands progressively
 
 ```bash
-whoop-cli help
-whoop-cli help workouts --json
-whoop-cli discover --level 3 --json
-whoop-cli capabilities --json
+whoop-query-cli help
+whoop-query-cli help workouts --json
+whoop-query-cli discover --level 3 --json
+whoop-query-cli capabilities --json
 ```
 
 ## Auth Modes
@@ -148,8 +141,8 @@ Available on collection commands (`cycles`, `recoveries`, `sleep`, `workouts`):
 - Session/token data is stored at `.whoop/session.json` by default.
 - Treat session files, exported JSON, and terminal logs as sensitive.
 - Do not commit secrets or session files.
-- Use `whoop-cli revoke` to revoke OAuth access and clear local session data.
-- Use `whoop-cli logout` to clear local session data only.
+- Use `whoop-query-cli revoke` to revoke OAuth access and clear local session data.
+- Use `whoop-query-cli logout` to clear local session data only.
 
 ## Troubleshooting
 
@@ -158,4 +151,4 @@ Available on collection commands (`cycles`, `recoveries`, `sleep`, `workouts`):
 - `login-local requires an http://localhost redirect URI`:
   - Set `WHOOP_REDIRECT_URI` to `http://localhost:8787/callback`.
 - `No access token found`:
-  - Re-run `whoop-cli login-local --open`.
+  - Re-run `whoop-query-cli login-local --open`.

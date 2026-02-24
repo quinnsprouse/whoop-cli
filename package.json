@@ -1,5 +1,5 @@
 {
-  "name": "whoop-cli",
+  "name": "@quinnsprouse/whoop-cli",
   "version": "0.1.0",
   "description": "Unofficial CLI for authenticating with WHOOP and querying v2 user data",
   "main": "src/cli.mjs",
@@ -10,6 +10,7 @@
   "files": [
     "src",
     "README.md",
+    "PRIVACY.md",
     "LICENSE"
   ],
   "scripts": {
@@ -36,12 +37,25 @@
   "keywords": [
     "whoop",
     "cli",
-    "oauth2"
+    "oauth2",
+    "fitness",
+    "health"
   ],
-  "author": "",
+  "author": "Quinn Sprouse",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quinnsprouse/whoop-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/quinnsprouse/whoop-cli/issues"
+  },
+  "homepage": "https://github.com/quinnsprouse/whoop-cli#readme",
   "engines": {
     "node": ">=20.0.0"
   },
-  "type": "module"
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  }
 }

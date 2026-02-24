@@ -14,6 +14,19 @@ CLI to authenticate with the official WHOOP API and query your account data, inc
 
 ## Install
 
+### Run without install (npx)
+
+```bash
+npx --yes @quinnsprouse/whoop-cli help
+```
+
+### Global install
+
+```bash
+npm install -g @quinnsprouse/whoop-cli
+whoop-cli help
+```
+
 ### Local development (from source)
 
 ```bash
@@ -23,7 +36,7 @@ npm install
 npm run help
 ```
 
-### Run without global install
+### Run from local source
 
 ```bash
 node src/cli.mjs help

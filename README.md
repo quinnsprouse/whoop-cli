@@ -2,49 +2,57 @@
 
 > Unofficial tool. Not affiliated with or endorsed by WHOOP.
 
-Agent-friendly CLI for WHOOP official API (OAuth2 + v2 endpoints), including:
+CLI to authenticate with the official WHOOP API and query your account data, including:
 
-- OAuth login URL generation + code exchange
+- OAuth login URL generation + authorization-code exchange
 - one-step local OAuth callback capture (`login-local`)
-- token refresh + local session persistence
-- profile + body measurements
-- cycles, recoveries, sleep, workouts collections
-- endpoint-specific fetches (`sleep-by-id`, `workout-by-id`, `cycle-recovery`, `cycle-sleep`)
-- local-day snapshot command (`day`)
-- machine-friendly filtering/projection for agents
+- profile and body measurements
+- cycles, recoveries, sleep, and workouts collections
+- endpoint lookups: `sleep-by-id`, `workout-by-id`, `cycle-recovery`, `cycle-sleep`
+- day snapshot across core WHOOP datasets
+- agent-friendly filtering, field projection, and JSON/JSONL output
 
 ## Install
 
 ### Local development (from source)
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/quinnsprouse/whoop-cli.git
 cd whoop-cli
 npm install
 npm run help
 ```
 
-### Run without install
+### Run without global install
 
 ```bash
 node src/cli.mjs help
 ```
 
-## OAuth Setup (WHOOP Developer Dashboard)
+### Optional global command (from local source)
 
-You need:
+```bash
+npm link
+whoop-cli help
+```
 
-- `WHOOP_CLIENT_ID`
-- `WHOOP_CLIENT_SECRET`
-- `WHOOP_REDIRECT_URI` (must match your app settings)
+## WHOOP App Setup (Developer Dashboard)
 
-Optional:
+1. Create a WHOOP app in the dashboard.
+2. Set Privacy Policy URL (for this repo):
+   - `https://github.com/quinnsprouse/whoop-cli/blob/main/PRIVACY.md`
+3. Add Redirect URL(s):
+   - `http://localhost:8787/callback` (recommended for `login-local`)
+4. Request scopes your CLI needs (recommended):
+   - `read:profile`
+   - `read:body_measurement`
+   - `read:workout`
+   - `read:sleep`
+   - `read:recovery`
+   - `read:cycles`
+   - `offline` (required if you want refresh tokens)
 
-- `WHOOP_SCOPE` (defaults include all read scopes + `offline`)
-- `WHOOP_SESSION_FILE` (defaults to `.whoop/session.json`)
-- `WHOOP_TIMEZONE` (for local-day bucketing)
-
-Example:
+## Local Environment
 
 ```bash
 export WHOOP_CLIENT_ID="..."
@@ -52,57 +60,89 @@ export WHOOP_CLIENT_SECRET="..."
 export WHOOP_REDIRECT_URI="http://localhost:8787/callback"
 ```
 
-## WHOOP Dashboard Privacy Policy URL
+Optional:
 
-If this repo is public, you can use the policy in this repo:
-
-- `PRIVACY.md` (edit contact fields before publishing)
-
-After pushing to GitHub, use one of these URLs in the WHOOP Developer Dashboard:
-
-- `https://github.com/<your-user>/<your-repo>/blob/main/PRIVACY.md`
-- `https://raw.githubusercontent.com/<your-user>/<your-repo>/main/PRIVACY.md`
-
-The GitHub `blob` URL is usually the most user-friendly in browser.
+- `WHOOP_SCOPE` (space/comma-separated scopes)
+- `WHOOP_SESSION_FILE` (default: `.whoop/session.json`)
+- `WHOOP_TIMEZONE` (default: system timezone)
 
 ## Quickstart
 
-1. One-step local OAuth (recommended if redirect URI is localhost)
+1. Authenticate (recommended)
 
 ```bash
 whoop-cli login-local --open
 ```
 
-2. Manual fallback (if you are not using localhost redirect)
-
-```bash
-whoop-cli login --open
-whoop-cli exchange-code --code <authorization_code>
-```
-
-3. Query data
+2. Query data
 
 ```bash
 whoop-cli whoami --json
 whoop-cli workouts --days 14 --json
 whoop-cli recoveries --days 30 --max-recovery 50 --json
-whoop-cli sleep --from 2026-02-01 --to 2026-02-24 --json
-whoop-cli sleep-by-id --sleep-id <uuid> --json
-whoop-cli workout-by-id --workout-id <uuid> --json
-whoop-cli cycle-recovery --cycle-id 123456 --json
-whoop-cli cycle-sleep --cycle-id 123456 --json
+whoop-cli sleep --days 14 --json
 whoop-cli day --date 2026-02-24 --include-records --json
 ```
 
-## Agent Features
+3. Query endpoint-specific records
 
-- `discover --level 1|2|3 --json`
-- `help <command> --json`
-- filters: `--from --to --type --contains --min-strain --max-strain --min-recovery --max-recovery --sort --result-limit --fields`
-- output: `--json`, `--jsonl`, `--records-only`, `--output <path>`
-- direct endpoint commands: `sleep-by-id`, `workout-by-id`, `cycle-recovery`, `cycle-sleep`
+```bash
+whoop-cli sleep-by-id --sleep-id <uuid> --json
+whoop-cli workout-by-id --workout-id <uuid> --json
+whoop-cli cycle-recovery --cycle-id <int> --json
+whoop-cli cycle-sleep --cycle-id <int> --json
+```
+
+4. Discover commands progressively
+
+```bash
+whoop-cli help
+whoop-cli help workouts --json
+whoop-cli discover --level 3 --json
+whoop-cli capabilities --json
+```
+
+## Auth Modes
+
+- `login-local`: starts local callback server, captures `code`, exchanges token automatically.
+- `login` + `exchange-code`: manual OAuth flow if you do not want local callback capture.
+
+## Output
+
+- default: pretty JSON
+- `--json`: structured JSON
+- `--jsonl`: one record per line
+- `--fields a,b,c`: project record fields
+- `--records-only`: lighter record payloads
+- `--tz <IANA timezone>`: localize day boundaries/timestamps (defaults to `WHOOP_TIMEZONE` or system timezone)
+
+## Agent Filters
+
+Available on collection commands (`cycles`, `recoveries`, `sleep`, `workouts`):
+
+- `--from YYYY-MM-DD`
+- `--to YYYY-MM-DD`
+- `--type a,b,c`
+- `--contains <text>`
+- `--min-strain <n>` / `--max-strain <n>`
+- `--min-recovery <n>` / `--max-recovery <n>`
+- `--sort date|date-desc|strain|strain-desc|recovery|recovery-desc|name|name-desc`
+- `--result-limit <n>`
+- `--fields a,b,c`
 
 ## Security
 
-- Session/token data is stored in `.whoop/session.json` by default.
-- Treat this file as sensitive and do not commit it.
+- Session/token data is stored at `.whoop/session.json` by default.
+- Treat session files, exported JSON, and terminal logs as sensitive.
+- Do not commit secrets or session files.
+- Use `whoop-cli revoke` to revoke OAuth access and clear local session data.
+- Use `whoop-cli logout` to clear local session data only.
+
+## Troubleshooting
+
+- Redirect mismatch:
+  - Ensure WHOOP dashboard Redirect URL exactly matches `WHOOP_REDIRECT_URI`.
+- `login-local requires an http://localhost redirect URI`:
+  - Set `WHOOP_REDIRECT_URI` to `http://localhost:8787/callback`.
+- `No access token found`:
+  - Re-run `whoop-cli login-local --open`.

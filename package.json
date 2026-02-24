@@ -1,0 +1,47 @@
+{
+  "name": "whoop-cli",
+  "version": "0.1.0",
+  "description": "Unofficial CLI for authenticating with WHOOP and querying v2 user data",
+  "main": "src/cli.mjs",
+  "bin": {
+    "whoop-cli": "src/cli.mjs",
+    "wcli": "src/cli.mjs"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "cli": "node src/cli.mjs",
+    "help": "node src/cli.mjs help",
+    "discover": "node src/cli.mjs discover",
+    "capabilities": "node src/cli.mjs capabilities",
+    "login": "node src/cli.mjs login",
+    "login-local": "node src/cli.mjs login-local",
+    "whoami": "node src/cli.mjs whoami",
+    "profile": "node src/cli.mjs profile",
+    "body": "node src/cli.mjs body",
+    "cycles": "node src/cli.mjs cycles",
+    "recoveries": "node src/cli.mjs recoveries",
+    "sleep": "node src/cli.mjs sleep",
+    "workouts": "node src/cli.mjs workouts",
+    "sleep-by-id": "node src/cli.mjs sleep-by-id",
+    "workout-by-id": "node src/cli.mjs workout-by-id",
+    "cycle-recovery": "node src/cli.mjs cycle-recovery",
+    "cycle-sleep": "node src/cli.mjs cycle-sleep",
+    "day": "node src/cli.mjs day",
+    "logout": "node src/cli.mjs logout"
+  },
+  "keywords": [
+    "whoop",
+    "cli",
+    "oauth2"
+  ],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "type": "module"
+}

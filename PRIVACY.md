@@ -79,4 +79,4 @@ For questions about this policy for `whoop-cli`, contact:
 
 - Name: `REPLACE_WITH_YOUR_NAME`
 - Email: `REPLACE_WITH_PUBLIC_CONTACT_EMAIL`
-- Repository: `REPLACE_WITH_PUBLIC_REPO_URL`
+- Repository: `https://github.com/quinnsprouse/whoop-cli`

@@ -62,47 +62,55 @@ export const COMMANDS = {
   cycles: {
     summary: "List cycle records in a date window.",
     usage: [
-      "node src/cli.mjs cycles [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl]",
+      "node src/cli.mjs cycles [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl|--csv]",
     ],
   },
   recoveries: {
     summary: "List recovery records in a date window.",
     usage: [
-      "node src/cli.mjs recoveries [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl]",
+      "node src/cli.mjs recoveries [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl|--csv]",
     ],
   },
   sleep: {
     summary: "List sleep records in a date window.",
     usage: [
-      "node src/cli.mjs sleep [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl]",
+      "node src/cli.mjs sleep [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl|--csv]",
     ],
   },
   workouts: {
     summary: "List workout records in a date window.",
     usage: [
-      "node src/cli.mjs workouts [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl]",
+      "node src/cli.mjs workouts [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl|--csv]",
     ],
+  },
+  "cycle-by-id": {
+    summary: "Fetch a cycle activity by WHOOP cycle ID.",
+    usage: ["node src/cli.mjs cycle-by-id --cycle-id <int> [--json|--csv]"],
+  },
+  "activity-map": {
+    summary: "Map legacy v1 activity ID to v2 UUID via WHOOP mapping endpoint.",
+    usage: ["node src/cli.mjs activity-map --activity-v1-id <int> [--json|--csv]"],
   },
   "sleep-by-id": {
     summary: "Fetch a sleep activity by WHOOP sleep UUID.",
-    usage: ["node src/cli.mjs sleep-by-id --sleep-id <uuid> [--json]"],
+    usage: ["node src/cli.mjs sleep-by-id --sleep-id <uuid> [--json|--csv]"],
   },
   "workout-by-id": {
     summary: "Fetch a workout activity by WHOOP workout UUID.",
-    usage: ["node src/cli.mjs workout-by-id --workout-id <uuid> [--json]"],
+    usage: ["node src/cli.mjs workout-by-id --workout-id <uuid> [--json|--csv]"],
   },
   "cycle-recovery": {
     summary: "Fetch recovery record for a specific cycle ID.",
-    usage: ["node src/cli.mjs cycle-recovery --cycle-id <int> [--json]"],
+    usage: ["node src/cli.mjs cycle-recovery --cycle-id <int> [--json|--csv]"],
   },
   "cycle-sleep": {
     summary: "Fetch sleep record for a specific cycle ID.",
-    usage: ["node src/cli.mjs cycle-sleep --cycle-id <int> [--json]"],
+    usage: ["node src/cli.mjs cycle-sleep --cycle-id <int> [--json|--csv]"],
   },
   day: {
     summary: "Fetch one local-day snapshot across cycles, recoveries, sleep, and workouts.",
     usage: [
-      "node src/cli.mjs day [--date YYYY-MM-DD] [--include-records] [--json]",
+      "node src/cli.mjs day [--date YYYY-MM-DD] [--include-records] [--json|--csv]",
     ],
   },
   revoke: {
@@ -123,8 +131,8 @@ export const GLOBAL_NOTES = [
   "OAuth endpoints: https://api.prod.whoop.com/oauth/oauth2/auth and /oauth/oauth2/token",
   "Fast auth: use login-local with an http://localhost redirect URI to auto-capture code.",
   "Timezone: --tz <IANA timezone> (for example America/New_York).",
-  "Output modes: default JSON, --json, --jsonl, --output <path>",
-  "Session file default: .whoop/session.json",
+  "Output modes: default JSON, --json, --jsonl, --csv, --output <path>",
+  "Session file default: ~/.whoop/session.json",
   "Collection page size max: 25 records/request (WHOOP API)",
   "Agent filters: --from --to --type --contains --min-strain --max-strain --min-recovery --max-recovery --sort --result-limit --fields",
   "Agent output: --records-only",
@@ -176,7 +184,7 @@ const SHARED_FLAGS = {
   session: ["session-file"],
   client: ["client-id", "client-secret", "redirect-uri", "scopes"],
   json: ["json"],
-  jsonAndJsonl: ["json", "jsonl"],
+  structured: ["json", "jsonl", "csv"],
   agentFilters: AGENT_FILTER_OPTIONS.map((option) => trimFlagPrefix(option.flag)),
   agentOutput: AGENT_OUTPUT_OPTIONS.map((option) => trimFlagPrefix(option.flag)),
 };
@@ -232,28 +240,28 @@ export const COMMAND_FLAG_ALLOWLIST = {
   whoami: mergeFlagGroups(
     SHARED_FLAGS.help,
     SHARED_FLAGS.output,
-    SHARED_FLAGS.json,
+    SHARED_FLAGS.structured,
     SHARED_FLAGS.session,
     SHARED_FLAGS.client,
   ),
   profile: mergeFlagGroups(
     SHARED_FLAGS.help,
     SHARED_FLAGS.output,
-    SHARED_FLAGS.json,
+    SHARED_FLAGS.structured,
     SHARED_FLAGS.session,
     SHARED_FLAGS.client,
   ),
   body: mergeFlagGroups(
     SHARED_FLAGS.help,
     SHARED_FLAGS.output,
-    SHARED_FLAGS.json,
+    SHARED_FLAGS.structured,
     SHARED_FLAGS.session,
     SHARED_FLAGS.client,
   ),
   cycles: mergeFlagGroups(
     SHARED_FLAGS.help,
     SHARED_FLAGS.output,
-    SHARED_FLAGS.jsonAndJsonl,
+    SHARED_FLAGS.structured,
     SHARED_FLAGS.session,
     SHARED_FLAGS.client,
     SHARED_FLAGS.agentFilters,
@@ -263,7 +271,7 @@ export const COMMAND_FLAG_ALLOWLIST = {
   recoveries: mergeFlagGroups(
     SHARED_FLAGS.help,
     SHARED_FLAGS.output,
-    SHARED_FLAGS.jsonAndJsonl,
+    SHARED_FLAGS.structured,
     SHARED_FLAGS.session,
     SHARED_FLAGS.client,
     SHARED_FLAGS.agentFilters,
@@ -273,7 +281,7 @@ export const COMMAND_FLAG_ALLOWLIST = {
   sleep: mergeFlagGroups(
     SHARED_FLAGS.help,
     SHARED_FLAGS.output,
-    SHARED_FLAGS.jsonAndJsonl,
+    SHARED_FLAGS.structured,
     SHARED_FLAGS.session,
     SHARED_FLAGS.client,
     SHARED_FLAGS.agentFilters,
@@ -283,17 +291,33 @@ export const COMMAND_FLAG_ALLOWLIST = {
   workouts: mergeFlagGroups(
     SHARED_FLAGS.help,
     SHARED_FLAGS.output,
-    SHARED_FLAGS.jsonAndJsonl,
+    SHARED_FLAGS.structured,
     SHARED_FLAGS.session,
     SHARED_FLAGS.client,
     SHARED_FLAGS.agentFilters,
     SHARED_FLAGS.agentOutput,
     ["days", "from", "to", "limit", "all-pages", "start", "end", "next-token"],
   ),
+  "cycle-by-id": mergeFlagGroups(
+    SHARED_FLAGS.help,
+    SHARED_FLAGS.output,
+    SHARED_FLAGS.structured,
+    SHARED_FLAGS.session,
+    SHARED_FLAGS.client,
+    ["cycle-id"],
+  ),
+  "activity-map": mergeFlagGroups(
+    SHARED_FLAGS.help,
+    SHARED_FLAGS.output,
+    SHARED_FLAGS.structured,
+    SHARED_FLAGS.session,
+    SHARED_FLAGS.client,
+    ["activity-v1-id"],
+  ),
   "sleep-by-id": mergeFlagGroups(
     SHARED_FLAGS.help,
     SHARED_FLAGS.output,
-    SHARED_FLAGS.json,
+    SHARED_FLAGS.structured,
     SHARED_FLAGS.session,
     SHARED_FLAGS.client,
     ["sleep-id"],
@@ -301,7 +325,7 @@ export const COMMAND_FLAG_ALLOWLIST = {
   "workout-by-id": mergeFlagGroups(
     SHARED_FLAGS.help,
     SHARED_FLAGS.output,
-    SHARED_FLAGS.json,
+    SHARED_FLAGS.structured,
     SHARED_FLAGS.session,
     SHARED_FLAGS.client,
     ["workout-id"],
@@ -309,7 +333,7 @@ export const COMMAND_FLAG_ALLOWLIST = {
   "cycle-recovery": mergeFlagGroups(
     SHARED_FLAGS.help,
     SHARED_FLAGS.output,
-    SHARED_FLAGS.json,
+    SHARED_FLAGS.structured,
     SHARED_FLAGS.session,
     SHARED_FLAGS.client,
     ["cycle-id"],
@@ -317,7 +341,7 @@ export const COMMAND_FLAG_ALLOWLIST = {
   "cycle-sleep": mergeFlagGroups(
     SHARED_FLAGS.help,
     SHARED_FLAGS.output,
-    SHARED_FLAGS.json,
+    SHARED_FLAGS.structured,
     SHARED_FLAGS.session,
     SHARED_FLAGS.client,
     ["cycle-id"],
@@ -325,7 +349,7 @@ export const COMMAND_FLAG_ALLOWLIST = {
   day: mergeFlagGroups(
     SHARED_FLAGS.help,
     SHARED_FLAGS.output,
-    SHARED_FLAGS.json,
+    SHARED_FLAGS.structured,
     SHARED_FLAGS.session,
     SHARED_FLAGS.client,
     ["date", "include-records"],

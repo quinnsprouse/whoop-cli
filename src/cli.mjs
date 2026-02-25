@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { WhoopClient } from "./whoop-client.mjs";
@@ -47,6 +48,8 @@ import {
   commandWorkouts,
 } from "./commands/collections.mjs";
 import {
+  commandActivityMap,
+  commandCycleById,
   commandCycleRecovery,
   commandCycleSleep,
   commandSleepById,
@@ -78,6 +81,8 @@ function printGlobalHelp() {
   console.log("  node src/cli.mjs exchange-code --code <authorization_code>");
   console.log("  node src/cli.mjs whoami --json");
   console.log("  node src/cli.mjs workouts --days 30 --min-strain 10 --sort strain-desc --json");
+  console.log("  node src/cli.mjs cycle-by-id --cycle-id 123456 --json");
+  console.log("  node src/cli.mjs activity-map --activity-v1-id 12345 --json");
   console.log("  node src/cli.mjs sleep-by-id --sleep-id <uuid> --json");
   console.log("  node src/cli.mjs cycle-recovery --cycle-id 123456 --json");
   console.log("  node src/cli.mjs day --date 2026-02-24 --include-records --json");
@@ -209,7 +214,7 @@ function printCommandHelp(command, flags = {}) {
       supportsAgentFilters: FILTERABLE_COMMANDS.has(command),
       agentFilterOptions: FILTERABLE_COMMANDS.has(command) ? AGENT_FILTER_OPTIONS : [],
       agentOutputOptions: FILTERABLE_COMMANDS.has(command) ? AGENT_OUTPUT_OPTIONS : [],
-      outputModes: ["text", "json", "jsonl"],
+      outputModes: ["text", "json", "jsonl", "csv"],
     };
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return 0;
@@ -291,7 +296,7 @@ function requirePositiveInteger(value, fallback) {
 }
 
 function isJsonMode(flags) {
-  return Boolean(flags.json || flags.jsonl);
+  return Boolean(flags.json || flags.jsonl || flags.csv);
 }
 
 function isoDateShift(days) {
@@ -306,6 +311,94 @@ function withTimeZoneMeta(payload) {
 
 async function writeOutput(payload, flags, textRenderer = null) {
   const payloadWithTimeZone = withTimeZoneMeta(payload);
+
+  if (flags.csv) {
+    const splitCsv = (value) => {
+      if (value == null || value === true) return [];
+      return String(value)
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean);
+    };
+
+    const getByPath = (object, pathValue) => {
+      const segments = String(pathValue ?? "")
+        .split(".")
+        .map((part) => part.trim())
+        .filter(Boolean);
+      if (segments.length === 0) return undefined;
+      let cursor = object;
+      for (const segment of segments) {
+        if (cursor == null || typeof cursor !== "object") return undefined;
+        cursor = cursor[segment];
+      }
+      return cursor;
+    };
+
+    const records = Array.isArray(payloadWithTimeZone?.records)
+      ? payloadWithTimeZone.records
+      : Array.isArray(payloadWithTimeZone)
+        ? payloadWithTimeZone
+        : payloadWithTimeZone?.record && typeof payloadWithTimeZone.record === "object"
+          ? [payloadWithTimeZone.record]
+          : payloadWithTimeZone && typeof payloadWithTimeZone === "object"
+            ? [payloadWithTimeZone]
+            : [];
+
+    const fields = splitCsv(flags.fields);
+    const headers =
+      fields.length > 0
+        ? fields
+        : Array.from(
+          records.reduce((set, item) => {
+            if (item && typeof item === "object" && !Array.isArray(item)) {
+              for (const key of Object.keys(item)) set.add(key);
+            }
+            return set;
+          }, new Set()),
+        );
+
+    const formatCell = (value) => {
+      if (value == null) return "";
+      if (typeof value === "string") {
+        if (/[",\n\r]/.test(value)) return `"${value.replace(/"/g, "\"\"")}"`;
+        return value;
+      }
+      if (typeof value === "number" || typeof value === "boolean") return String(value);
+      const json = JSON.stringify(value);
+      if (json == null) return "";
+      if (/[",\n\r]/.test(json)) return `"${json.replace(/"/g, "\"\"")}"`;
+      return json;
+    };
+
+    const rows = [];
+    if (headers.length > 0) {
+      rows.push(headers.map((header) => formatCell(header)).join(","));
+      for (const record of records) {
+        const line = headers
+          .map((header) => {
+            const value =
+              record && typeof record === "object"
+                ? fields.length > 0
+                  ? getByPath(record, header)
+                  : record[header]
+                : undefined;
+            return formatCell(value);
+          })
+          .join(",");
+        rows.push(line);
+      }
+    }
+
+    const content = rows.join("\n");
+    if (flags.output) {
+      await fs.writeFile(flags.output, `${content}${content ? "\n" : ""}`, "utf8");
+      console.log(`Wrote CSV to ${flags.output}`);
+      return;
+    }
+    if (content) console.log(content);
+    return;
+  }
 
   if (flags.jsonl) {
     const records = Array.isArray(payloadWithTimeZone?.records)
@@ -350,7 +443,7 @@ async function withClient(flags) {
   const sessionFile =
     flags["session-file"] ??
     process.env.WHOOP_SESSION_FILE ??
-    path.resolve(".whoop", "session.json");
+    path.resolve(os.homedir(), ".whoop", "session.json");
 
   const client = new WhoopClient({
     clientId: flags["client-id"] ?? process.env.WHOOP_CLIENT_ID ?? null,
@@ -483,6 +576,12 @@ async function main() {
       return;
     case "workouts":
       await commandWorkouts(flags, commandDeps);
+      return;
+    case "cycle-by-id":
+      await commandCycleById(flags, commandDeps);
+      return;
+    case "activity-map":
+      await commandActivityMap(flags, commandDeps);
       return;
     case "sleep-by-id":
       await commandSleepById(flags, commandDeps);

@@ -14,6 +14,14 @@ function requireCycleId(value) {
   return numeric;
 }
 
+function requireActivityV1Id(value) {
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric < 1) {
+    throw new Error(`Invalid activity v1 id "${value}". Expected a positive integer.`);
+  }
+  return numeric;
+}
+
 function attachLocalDateFields(record, deps) {
   if (!record || typeof record !== "object") return record;
   const { toDateOnlyInTimeZone, formatDateTimeInTimeZone, timeZone } = deps;
@@ -73,6 +81,22 @@ export async function commandSleepById(flags, deps) {
   const sleepId = requireId("sleep-id", flags["sleep-id"]);
   const record = attachLocalDateFields(await client.getSleepById(sleepId), deps);
   await writeEndpointPayload("sleep-by-id", record, "sleepId", sleepId, flags, deps);
+}
+
+export async function commandCycleById(flags, deps) {
+  const { withClient } = deps;
+  const client = await withClient(flags);
+  const cycleId = requireCycleId(flags["cycle-id"]);
+  const record = attachLocalDateFields(await client.getCycleById(cycleId), deps);
+  await writeEndpointPayload("cycle-by-id", record, "cycleId", cycleId, flags, deps);
+}
+
+export async function commandActivityMap(flags, deps) {
+  const { withClient } = deps;
+  const client = await withClient(flags);
+  const activityV1Id = requireActivityV1Id(flags["activity-v1-id"]);
+  const record = await client.getActivityMapping(activityV1Id);
+  await writeEndpointPayload("activity-map", record, "activityV1Id", activityV1Id, flags, deps);
 }
 
 export async function commandWorkoutById(flags, deps) {

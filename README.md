@@ -8,9 +8,10 @@ CLI to authenticate with the official WHOOP API and query your account data, inc
 - one-step local OAuth callback capture (`login-local`)
 - profile and body measurements
 - cycles, recoveries, sleep, and workouts collections
-- endpoint lookups: `sleep-by-id`, `workout-by-id`, `cycle-recovery`, `cycle-sleep`
+- endpoint lookups: `cycle-by-id`, `activity-map`, `sleep-by-id`, `workout-by-id`, `cycle-recovery`, `cycle-sleep`
 - day snapshot across core WHOOP datasets
-- agent-friendly filtering, field projection, and JSON/JSONL output
+- agent-friendly filtering, field projection, and JSON/JSONL/CSV output
+- automatic token refresh with cross-process lock protection and retry/backoff for rate limits
 
 ## Install
 
@@ -69,7 +70,7 @@ export WHOOP_REDIRECT_URI="http://localhost:8787/callback"
 Optional:
 
 - `WHOOP_SCOPE` (space/comma-separated scopes)
-- `WHOOP_SESSION_FILE` (default: `.whoop/session.json`)
+- `WHOOP_SESSION_FILE` (default: `~/.whoop/session.json`)
 - `WHOOP_TIMEZONE` (default: system timezone)
 
 ## Quickstart
@@ -95,6 +96,8 @@ whoop-query-cli day --date 2026-02-24 --include-records --json
 ```bash
 whoop-query-cli sleep-by-id --sleep-id <uuid> --json
 whoop-query-cli workout-by-id --workout-id <uuid> --json
+whoop-query-cli cycle-by-id --cycle-id <int> --json
+whoop-query-cli activity-map --activity-v1-id <int> --json
 whoop-query-cli cycle-recovery --cycle-id <int> --json
 whoop-query-cli cycle-sleep --cycle-id <int> --json
 ```
@@ -112,12 +115,14 @@ whoop-query-cli capabilities --json
 
 - `login-local`: starts local callback server, captures `code`, exchanges token automatically.
 - `login` + `exchange-code`: manual OAuth flow if you do not want local callback capture.
+- Access tokens are auto-refreshed using the stored refresh token (`offline` scope required).
 
 ## Output
 
 - default: pretty JSON
 - `--json`: structured JSON
 - `--jsonl`: one record per line
+- `--csv`: comma-separated rows (supports `--fields` projection)
 - `--fields a,b,c`: project record fields
 - `--records-only`: lighter record payloads
 - `--tz <IANA timezone>`: localize day boundaries/timestamps (defaults to `WHOOP_TIMEZONE` or system timezone)
@@ -138,7 +143,7 @@ Available on collection commands (`cycles`, `recoveries`, `sleep`, `workouts`):
 
 ## Security
 
-- Session/token data is stored at `.whoop/session.json` by default.
+- Session/token data is stored at `~/.whoop/session.json` by default.
 - Treat session files, exported JSON, and terminal logs as sensitive.
 - Do not commit secrets or session files.
 - Use `whoop-query-cli revoke` to revoke OAuth access and clear local session data.
@@ -152,3 +157,7 @@ Available on collection commands (`cycles`, `recoveries`, `sleep`, `workouts`):
   - Set `WHOOP_REDIRECT_URI` to `http://localhost:8787/callback`.
 - `No access token found`:
   - Re-run `whoop-query-cli login-local --open`.
+- Cron/auth drift:
+  - Ensure `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, and `WHOOP_REDIRECT_URI` are available in the cron environment.
+  - Use a stable session file path (recommended: `WHOOP_SESSION_FILE="$HOME/.whoop/session.json"`).
+  - If refresh token is revoked/expired, re-authenticate with `whoop-query-cli login-local --open`.

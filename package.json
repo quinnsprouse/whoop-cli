@@ -1,6 +1,6 @@
 {
   "name": "whoop-query-cli",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Unofficial CLI for authenticating with WHOOP and querying v2 user data",
   "main": "src/cli.mjs",
   "bin": {
@@ -15,6 +15,7 @@
   ],
   "scripts": {
     "cli": "node src/cli.mjs",
+    "test": "node --test",
     "help": "node src/cli.mjs help",
     "discover": "node src/cli.mjs discover",
     "capabilities": "node src/cli.mjs capabilities",
@@ -27,11 +28,15 @@
     "recoveries": "node src/cli.mjs recoveries",
     "sleep": "node src/cli.mjs sleep",
     "workouts": "node src/cli.mjs workouts",
+    "cycle-by-id": "node src/cli.mjs cycle-by-id",
+    "activity-map": "node src/cli.mjs activity-map",
     "sleep-by-id": "node src/cli.mjs sleep-by-id",
     "workout-by-id": "node src/cli.mjs workout-by-id",
     "cycle-recovery": "node src/cli.mjs cycle-recovery",
     "cycle-sleep": "node src/cli.mjs cycle-sleep",
     "day": "node src/cli.mjs day",
+    "refresh-token": "node src/cli.mjs refresh-token",
+    "revoke": "node src/cli.mjs revoke",
     "logout": "node src/cli.mjs logout"
   },
   "keywords": [

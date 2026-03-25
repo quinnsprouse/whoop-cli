@@ -1,6 +1,7 @@
 import {
   AGENT_FILTER_OPTIONS,
   AGENT_OUTPUT_OPTIONS,
+  CLI_NAME,
   COMMANDS,
   FILTERABLE_COMMANDS,
 } from "../lib/command-manifest.mjs";
@@ -31,12 +32,12 @@ export function buildDiscoveryPayload(level = 1, commandFilter = null) {
         "Apply --from/--to/--type/--contains/--min-strain/--max-strain/--min-recovery/--max-recovery/--sort/--result-limit/--fields.",
     },
     firstSteps: [
-      "node src/cli.mjs capabilities --json",
-      "node src/cli.mjs login-local --open --json",
-      "node src/cli.mjs login --json",
-      "node src/cli.mjs whoami --json",
-      "node src/cli.mjs workouts --days 14 --json",
-      "node src/cli.mjs help workouts --json",
+      `${CLI_NAME} capabilities --json`,
+      `${CLI_NAME} login-local --open --json`,
+      `${CLI_NAME} login --json`,
+      `${CLI_NAME} whoami --json`,
+      `${CLI_NAME} workouts --days 14 --json`,
+      `${CLI_NAME} help workouts --json`,
     ],
     commandCount: commandEntries.length,
     commands: commandEntries,
@@ -47,17 +48,17 @@ export function buildDiscoveryPayload(level = 1, commandFilter = null) {
       {
         pattern: "Find highest-strain workouts over last 30 days",
         command:
-          "node src/cli.mjs workouts --days 30 --min-strain 12 --sort strain-desc --result-limit 20 --fields id,start,sport_name,score.strain --json",
+          `${CLI_NAME} workouts --days 30 --min-strain 12 --sort strain-desc --result-limit 20 --fields id,start,sport_name,score.strain --json`,
       },
       {
         pattern: "Inspect poor recovery days",
         command:
-          "node src/cli.mjs recoveries --days 60 --max-recovery 40 --sort recovery --fields cycle_id,created_at,score.recovery_score,score.resting_heart_rate --jsonl",
+          `${CLI_NAME} recoveries --days 60 --max-recovery 40 --sort recovery --fields cycle_id,created_at,score.recovery_score,score.resting_heart_rate --jsonl`,
       },
       {
         pattern: "Summarize sleep window",
         command:
-          "node src/cli.mjs sleep --from 2026-02-01 --to 2026-02-24 --fields id,start,end,score.sleep_performance_percentage,score.stage_summary.total_in_bed_time_milli --json",
+          `${CLI_NAME} sleep --from 2026-02-01 --to 2026-02-24 --fields id,start,end,score.sleep_performance_percentage,score.stage_summary.total_in_bed_time_milli --json`,
       },
     ];
   }

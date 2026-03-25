@@ -11,6 +11,9 @@ CLI to authenticate with the official WHOOP API and query your account data, inc
 - endpoint lookups: `cycle-by-id`, `activity-map`, `sleep-by-id`, `workout-by-id`, `cycle-recovery`, `cycle-sleep`
 - day snapshot across core WHOOP datasets
 - agent-friendly filtering, field projection, and JSON/JSONL/CSV output
+- per-command help with concrete examples and progressive discovery
+- stdin support for single-value commands like `exchange-code`, `cycle-by-id`, and `sleep-by-id`
+- dry-run support for destructive local/session commands
 - automatic token refresh with cross-process lock protection and retry/backoff for rate limits
 
 ## Install
@@ -72,6 +75,7 @@ Optional:
 - `WHOOP_SCOPE` (space/comma-separated scopes)
 - `WHOOP_SESSION_FILE` (default: `~/.whoop/session.json`)
 - `WHOOP_TIMEZONE` (default: system timezone)
+- `WHOOP_BASE_URL` (advanced: override API base URL for local/integration testing)
 
 ## Quickstart
 
@@ -106,6 +110,7 @@ whoop-query-cli cycle-sleep --cycle-id <int> --json
 
 ```bash
 whoop-query-cli help
+whoop-query-cli help login-local
 whoop-query-cli help workouts --json
 whoop-query-cli discover --level 3 --json
 whoop-query-cli capabilities --json
@@ -126,6 +131,31 @@ whoop-query-cli capabilities --json
 - `--fields a,b,c`: project record fields
 - `--records-only`: lighter record payloads
 - `--tz <IANA timezone>`: localize day boundaries/timestamps (defaults to `WHOOP_TIMEZONE` or system timezone)
+
+## Agent-Friendly CLI Notes
+
+- Global help stays short. Use `whoop-query-cli help <command>` to get the options and examples for one command.
+- Required single inputs can come from flags or stdin:
+
+```bash
+whoop-query-cli exchange-code --code <authorization_code> --json
+printf '%s\n' "$WHOOP_AUTH_CODE" | whoop-query-cli exchange-code --stdin --json
+printf '%s\n' "123456" | whoop-query-cli cycle-by-id --stdin --json
+```
+
+- Destructive session commands support dry-run previews:
+
+```bash
+whoop-query-cli logout --dry-run --json
+whoop-query-cli revoke --dry-run --json
+```
+
+- Actual destructive commands require explicit confirmation:
+
+```bash
+whoop-query-cli logout --yes --json
+whoop-query-cli revoke --force --json
+```
 
 ## Agent Filters
 
@@ -161,3 +191,20 @@ Available on collection commands (`cycles`, `recoveries`, `sleep`, `workouts`):
   - Ensure `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, and `WHOOP_REDIRECT_URI` are available in the cron environment.
   - Use a stable session file path (recommended: `WHOOP_SESSION_FILE="$HOME/.whoop/session.json"`).
   - If refresh token is revoked/expired, re-authenticate with `whoop-query-cli login-local --open`.
+
+## Verification
+
+- Local automated checks:
+
+```bash
+npm test
+npm run test:package
+```
+
+- Opt-in live WHOOP smoke test:
+
+```bash
+npm run test:live
+```
+
+This expects `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, and `WHOOP_REDIRECT_URI`. If you want it to exercise code exchange too, set `WHOOP_AUTH_CODE`. If you want by-id checks, set `WHOOP_CYCLE_ID` and/or `WHOOP_SLEEP_ID`.

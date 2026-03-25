@@ -1,6 +1,6 @@
 {
   "name": "whoop-query-cli",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Unofficial CLI for authenticating with WHOOP and querying v2 user data",
   "main": "src/cli.mjs",
   "bin": {
@@ -16,6 +16,8 @@
   "scripts": {
     "cli": "node src/cli.mjs",
     "test": "node --test",
+    "test:package": "node scripts/package-smoke.mjs",
+    "test:live": "node scripts/live-smoke.mjs",
     "help": "node src/cli.mjs help",
     "discover": "node src/cli.mjs discover",
     "capabilities": "node src/cli.mjs capabilities",

@@ -1,6 +1,11 @@
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
 import { promisify } from "node:util";
+import {
+  formatConfirmationRequiredMessage,
+  hasConfirmationBypass,
+  resolveRequiredFlagValue,
+} from "../lib/command-input.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -286,13 +291,14 @@ export async function commandLoginLocal(flags, deps) {
 }
 
 export async function commandExchangeCode(flags, deps) {
-  const { withClient, writeOutput } = deps;
+  const { withClient, writeOutput, readStdinText } = deps;
+  const code = await resolveRequiredFlagValue({
+    command: "exchange-code",
+    flagName: "code",
+    flags,
+    readStdinText,
+  });
   const client = await withClient(flags);
-
-  const code = flags.code ? String(flags.code).trim() : "";
-  if (!code) {
-    throw new Error("Missing required --code for exchange-code.");
-  }
 
   const state = validateState(flags.state);
   const result = await client.exchangeCodeForToken({ code, state });
@@ -316,17 +322,118 @@ export async function commandWhoAmI(flags, deps) {
 export async function commandLogout(flags, deps) {
   const { withClient, writeOutput } = deps;
   const client = await withClient(flags);
+  const hadSession = Boolean(
+    client.session?.tokens || client.session?.pendingAuthorization || client.session?.oauth,
+  );
+  const confirmed = hasConfirmationBypass(flags);
+
+  if (flags["dry-run"]) {
+    await writeOutput(
+      {
+        ok: true,
+        command: "logout",
+        dryRun: true,
+        wouldClearSession: hadSession,
+        alreadyLoggedOut: !hadSession,
+        sessionFile: client.sessionFile,
+        message: hadSession
+          ? "Would clear the local WHOOP session file."
+          : "No local WHOOP session found; logout would be a no-op.",
+      },
+      { ...flags, json: true },
+    );
+    return;
+  }
+
+  if (hadSession && !confirmed) {
+    throw new Error(
+      formatConfirmationRequiredMessage(
+        "logout",
+        "logout clears the local WHOOP session file.",
+      ),
+    );
+  }
+
   await client.clearSession();
-  await writeOutput({ ok: true, message: "Session cleared." }, { ...flags, json: true });
+  await writeOutput(
+    {
+      ok: true,
+      command: "logout",
+      clearedSession: hadSession,
+      alreadyLoggedOut: !hadSession,
+      sessionFile: client.sessionFile,
+      message: hadSession ? "Session cleared." : "No local session found; nothing to clear.",
+    },
+    { ...flags, json: true },
+  );
 }
 
 export async function commandRevoke(flags, deps) {
   const { withClient, writeOutput } = deps;
   const client = await withClient(flags);
+  const hadAccessToken = Boolean(client.session?.tokens?.access_token);
+  const hadSession = Boolean(
+    client.session?.tokens || client.session?.pendingAuthorization || client.session?.oauth,
+  );
+  const confirmed = hasConfirmationBypass(flags);
+
+  if (flags["dry-run"]) {
+    await writeOutput(
+      {
+        ok: true,
+        command: "revoke",
+        dryRun: true,
+        wouldRevokeAccess: hadAccessToken,
+        wouldClearSession: hadSession,
+        sessionFile: client.sessionFile,
+        message: hadAccessToken
+          ? "Would revoke WHOOP access and clear the local session."
+          : "No access token found; revoke would only clear local session state if present.",
+      },
+      { ...flags, json: true },
+    );
+    return;
+  }
+
+  if ((hadAccessToken || hadSession) && !confirmed) {
+    throw new Error(
+      formatConfirmationRequiredMessage(
+        "revoke",
+        "revoke will invalidate WHOOP access and clear local session state.",
+      ),
+    );
+  }
+
+  if (!hadAccessToken) {
+    await client.clearSession();
+    await writeOutput(
+      {
+        ok: true,
+        command: "revoke",
+        revoked: false,
+        alreadyRevoked: true,
+        clearedSession: hadSession,
+        sessionFile: client.sessionFile,
+        message: hadSession
+          ? "No access token found; cleared local session only."
+          : "No access token found; revoke was a no-op.",
+      },
+      { ...flags, json: true },
+    );
+    return;
+  }
+
   await client.revokeAccess();
   await client.clearSession();
   await writeOutput(
-    { ok: true, revoked: true, message: "OAuth access revoked and local session cleared." },
+    {
+      ok: true,
+      command: "revoke",
+      revoked: true,
+      clearedSession: true,
+      sessionFile: client.sessionFile,
+      message: "OAuth access revoked and local session cleared.",
+    },
     { ...flags, json: true },
   );
 }

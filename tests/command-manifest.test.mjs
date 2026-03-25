@@ -28,3 +28,16 @@ test("csv mode is allowlisted for data and endpoint commands", () => {
     assert.ok(COMMAND_FLAG_ALLOWLIST[command].has("csv"), `${command} should allow --csv`);
   }
 });
+
+test("agent-oriented commands advertise examples and stdin support where relevant", () => {
+  assert.ok(COMMANDS.workouts.examples.length > 0);
+  assert.ok(COMMANDS["exchange-code"].stdin);
+  assert.ok(COMMAND_FLAG_ALLOWLIST["exchange-code"].has("stdin"));
+  assert.ok(COMMAND_FLAG_ALLOWLIST["cycle-by-id"].has("stdin"));
+  assert.ok(COMMAND_FLAG_ALLOWLIST.revoke.has("dry-run"));
+  assert.ok(COMMAND_FLAG_ALLOWLIST.revoke.has("yes"));
+  assert.ok(COMMAND_FLAG_ALLOWLIST.revoke.has("force"));
+  assert.ok(COMMAND_FLAG_ALLOWLIST.logout.has("dry-run"));
+  assert.ok(COMMAND_FLAG_ALLOWLIST.logout.has("yes"));
+  assert.ok(COMMAND_FLAG_ALLOWLIST.logout.has("force"));
+});

@@ -13,6 +13,7 @@ import {
 import {
   AGENT_FILTER_OPTIONS,
   AGENT_OUTPUT_OPTIONS,
+  CLI_NAME,
   COMMAND_FLAG_ALLOWLIST,
   COMMANDS,
   FILTERABLE_COMMANDS,
@@ -60,32 +61,31 @@ import { commandBody, commandProfile } from "./commands/user.mjs";
 let ACTIVE_TIME_ZONE = normalizeTimeZone();
 
 function printGlobalHelp() {
-  console.log("whoop-query-cli (unofficial)");
+  console.log(`${CLI_NAME} (unofficial)`);
+  console.log("");
+  console.log("Usage:");
+  console.log(`  ${CLI_NAME} <command> [flags]`);
+  console.log(`  ${CLI_NAME} help <command>`);
   console.log("");
   console.log("Commands:");
   for (const [name, def] of Object.entries(COMMANDS)) {
     console.log(`  ${name.padEnd(13)} ${def.summary}`);
   }
   console.log("");
-  console.log("Global notes:");
+  console.log("Notes:");
+  console.log(`  - ${PROJECT_NOTICE}`);
   for (const note of GLOBAL_NOTES) console.log(`  - ${note}`);
   console.log("");
-  console.log("Progressive disclosure:");
-  console.log("  node src/cli.mjs discover --level 1");
-  console.log("  node src/cli.mjs discover --level 2");
-  console.log("  node src/cli.mjs discover --command workouts --level 3 --json");
+  console.log("Next steps:");
+  console.log(`  ${CLI_NAME} help workouts`);
+  console.log(`  ${CLI_NAME} discover --level 2`);
+  console.log(`  ${CLI_NAME} workouts --days 14 --json`);
   console.log("");
   console.log("Examples:");
-  console.log("  node src/cli.mjs login-local --open");
-  console.log("  node src/cli.mjs login --open");
-  console.log("  node src/cli.mjs exchange-code --code <authorization_code>");
-  console.log("  node src/cli.mjs whoami --json");
-  console.log("  node src/cli.mjs workouts --days 30 --min-strain 10 --sort strain-desc --json");
-  console.log("  node src/cli.mjs cycle-by-id --cycle-id 123456 --json");
-  console.log("  node src/cli.mjs activity-map --activity-v1-id 12345 --json");
-  console.log("  node src/cli.mjs sleep-by-id --sleep-id <uuid> --json");
-  console.log("  node src/cli.mjs cycle-recovery --cycle-id 123456 --json");
-  console.log("  node src/cli.mjs day --date 2026-02-24 --include-records --json");
+  console.log(`  ${CLI_NAME} login-local --open`);
+  console.log(`  ${CLI_NAME} exchange-code --code <authorization_code> --json`);
+  console.log(`  ${CLI_NAME} whoami --json`);
+  console.log(`  ${CLI_NAME} workouts --days 30 --min-strain 10 --sort strain-desc --json`);
 }
 
 function levenshteinDistance(left, right) {
@@ -152,14 +152,14 @@ function getFlagSuggestions(input, allowedFlags, max = 3) {
 
 function formatUnknownCommandMessage(input) {
   const suggestions = getCommandSuggestions(input);
-  const lines = [`unknown command "${input}" for "whoop-query-cli"`];
+  const lines = [`unknown command "${input}" for "${CLI_NAME}"`];
   if (suggestions.length === 1) {
     lines.push("", "Did you mean this?", `  ${suggestions[0]}`);
   } else if (suggestions.length > 1) {
     lines.push("", "Did you mean one of these?");
     for (const suggestion of suggestions) lines.push(`  ${suggestion}`);
   }
-  lines.push("", 'Run "whoop-query-cli help" for available commands.');
+  lines.push("", `Run "${CLI_NAME} help" for available commands.`);
   return lines.join("\n");
 }
 
@@ -167,7 +167,7 @@ function formatUnknownFlagMessage(command, unknownFlags, allowedFlags) {
   const flags = Array.isArray(unknownFlags) ? unknownFlags : [unknownFlags];
   const normalizedAllowed = Array.from(new Set((allowedFlags ?? []).map((flag) => String(flag)))).sort();
   const lines = [
-    `unknown flag${flags.length > 1 ? "s" : ""} for "whoop-query-cli ${command}": ${flags.map((flag) => `--${flag}`).join(", ")}`,
+    `unknown flag${flags.length > 1 ? "s" : ""} for "${CLI_NAME} ${command}": ${flags.map((flag) => `--${flag}`).join(", ")}`,
   ];
 
   for (const flag of flags) {
@@ -186,7 +186,7 @@ function formatUnknownFlagMessage(command, unknownFlags, allowedFlags) {
     lines.push("", "Allowed flags: none");
   }
 
-  const helpCommand = command === "help" ? "whoop-query-cli help" : `whoop-query-cli help ${command}`;
+  const helpCommand = command === "help" ? `${CLI_NAME} help` : `${CLI_NAME} help ${command}`;
   lines.push("", `Run "${helpCommand}" for usage.`);
   return lines.join("\n");
 }
@@ -210,6 +210,9 @@ function printCommandHelp(command, flags = {}) {
       command,
       summary: def.summary,
       usage: def.usage,
+      options: def.options ?? [],
+      examples: def.examples ?? [],
+      stdin: def.stdin ?? null,
       timezoneOption: "--tz <IANA timezone> (defaults to WHOOP_TIMEZONE or system timezone)",
       supportsAgentFilters: FILTERABLE_COMMANDS.has(command),
       agentFilterOptions: FILTERABLE_COMMANDS.has(command) ? AGENT_FILTER_OPTIONS : [],
@@ -220,7 +223,7 @@ function printCommandHelp(command, flags = {}) {
     return 0;
   }
 
-  console.log(`whoop-query-cli ${command} (unofficial)`);
+  console.log(`${CLI_NAME} ${command} (unofficial)`);
   console.log("");
   console.log(def.summary);
   console.log(PROJECT_NOTICE);
@@ -228,11 +231,16 @@ function printCommandHelp(command, flags = {}) {
   console.log("Usage:");
   for (const line of def.usage) console.log(`  ${line}`);
   console.log("");
-  console.log("Timezone:");
-  console.log("  --tz <IANA timezone> Override local-day bucketing (defaults: WHOOP_TIMEZONE or system timezone). ");
+
+  if (Array.isArray(def.options) && def.options.length > 0) {
+    console.log("Options:");
+    for (const option of def.options) {
+      console.log(`  ${option.flag.padEnd(24)} ${option.description}`);
+    }
+    console.log("");
+  }
 
   if (FILTERABLE_COMMANDS.has(command)) {
-    console.log("");
     console.log("Agent filters:");
     for (const option of AGENT_FILTER_OPTIONS) {
       console.log(`  ${option.flag.padEnd(18)} ${option.description}`);
@@ -241,6 +249,18 @@ function printCommandHelp(command, flags = {}) {
     for (const option of AGENT_OUTPUT_OPTIONS) {
       console.log(`  ${option.flag.padEnd(18)} ${option.description}`);
     }
+    console.log("");
+  }
+
+  if (def.stdin?.description) {
+    console.log("Stdin:");
+    console.log(`  ${def.stdin.description}`);
+    console.log("");
+  }
+
+  if (Array.isArray(def.examples) && def.examples.length > 0) {
+    console.log("Examples:");
+    for (const example of def.examples) console.log(`  ${example}`);
   }
 
   return 0;
@@ -256,6 +276,14 @@ function parseArgs(argv) {
     const part = args[i];
     if (!part.startsWith("--")) {
       positionals.push(part);
+      continue;
+    }
+
+    const equalsIndex = part.indexOf("=");
+    if (equalsIndex > 2) {
+      const key = part.slice(2, equalsIndex);
+      const value = part.slice(equalsIndex + 1);
+      flags[key] = value === "" ? true : value;
       continue;
     }
 
@@ -475,6 +503,24 @@ function sortByDateDesc(records) {
 
 async function main() {
   const { command, flags, positionals } = parseArgs(process.argv);
+  let stdinTextPromise = null;
+
+  const readStdinText = async () => {
+    if (stdinTextPromise) return stdinTextPromise;
+    if (process.stdin.isTTY) {
+      throw new Error("--stdin was provided, but no piped stdin data was detected.");
+    }
+
+    stdinTextPromise = new Promise((resolve, reject) => {
+      const chunks = [];
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (chunk) => chunks.push(chunk));
+      process.stdin.on("end", () => resolve(chunks.join("")));
+      process.stdin.on("error", reject);
+    });
+
+    return stdinTextPromise;
+  };
 
   if (!command) {
     printGlobalHelp();
@@ -517,6 +563,7 @@ async function main() {
     applyAgentRecordFilters,
     toRecordsOnlyPayload,
     hasAgentRecordTransforms,
+    readStdinText,
     isJsonMode,
     writeOutput,
     requirePositiveInteger,
@@ -624,8 +671,8 @@ main().catch((error) => {
   }
 
   if (message.includes("No access token found")) {
-    console.error("Tip: run whoop-query-cli login, approve app access, then run whoop-query-cli exchange-code --code <authorization_code>.");
-    console.error("Tip: for one-step local auth, use whoop-query-cli login-local --open with a localhost redirect URI.");
+    console.error(`Tip: run ${CLI_NAME} login, approve app access, then run ${CLI_NAME} exchange-code --code <authorization_code>.`);
+    console.error(`Tip: for one-step local auth, use ${CLI_NAME} login-local --open with a localhost redirect URI.`);
   }
   if (message.includes("Missing WHOOP client ID")) {
     console.error("Tip: set WHOOP_CLIENT_ID or pass --client-id.");
@@ -639,13 +686,22 @@ main().catch((error) => {
   if (message.includes("login-local requires")) {
     console.error("Tip: set WHOOP_REDIRECT_URI to something like http://localhost:8787/callback");
   }
+  if (message.includes("--stdin was provided")) {
+    console.error(`Tip: pipe a value, for example: printf '%s\\n' \"value\" | ${CLI_NAME} <command> --stdin`);
+  }
+  if (message.includes("Re-run with --yes to continue")) {
+    console.error(`Tip: use --dry-run to preview destructive commands and --yes or --force to execute them.`);
+  }
   if (message.includes("Invalid date \"")) {
     console.error("Tip: expected date format is YYYY-MM-DD");
   }
   if (message.includes("Invalid timezone \"")) {
     console.error("Tip: use an IANA timezone like America/New_York.");
   }
-  console.error('Run "whoop-query-cli help" or "whoop-query-cli help <command>" for usage.');
+  if (message.includes("Invalid WHOOP base URL")) {
+    console.error("Tip: WHOOP_BASE_URL must be an absolute URL such as https://api.prod.whoop.com");
+  }
+  console.error(`Run "${CLI_NAME} help" or "${CLI_NAME} help <command>" for usage.`);
 
   if (process.env.WHOOP_CLI_DEBUG === "1" && error?.stack) {
     console.error("");

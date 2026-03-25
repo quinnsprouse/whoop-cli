@@ -26,6 +26,16 @@ const DEFAULT_REFRESH_LOCK_TIMEOUT_MS = 90000;
 const DEFAULT_REFRESH_LOCK_POLL_MS = 150;
 const DEFAULT_SESSION_FILE = path.resolve(os.homedir(), ".whoop", "session.json");
 
+function normalizeBaseUrl(value, fallback = WHOOP_BASE_URL) {
+  const raw = String(value ?? fallback ?? "").trim().replace(/\/+$/, "");
+  if (!raw) return fallback;
+  try {
+    return new URL(raw).toString().replace(/\/+$/, "");
+  } catch {
+    throw new Error(`Invalid WHOOP base URL "${value}". Expected an absolute URL.`);
+  }
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
@@ -213,6 +223,7 @@ export class WhoopClient {
     refreshLockStaleMs = DEFAULT_REFRESH_LOCK_STALE_MS,
     refreshLockTimeoutMs = DEFAULT_REFRESH_LOCK_TIMEOUT_MS,
     refreshLockPollMs = DEFAULT_REFRESH_LOCK_POLL_MS,
+    baseUrl = process.env.WHOOP_BASE_URL ?? WHOOP_BASE_URL,
   } = {}) {
     if (typeof fetchImpl !== "function") {
       throw new Error("Global fetch is unavailable. Use Node.js 20+ or pass fetchImpl.");
@@ -248,6 +259,10 @@ export class WhoopClient {
       Number.isFinite(refreshLockPollMs) && refreshLockPollMs > 0
         ? Math.floor(refreshLockPollMs)
         : DEFAULT_REFRESH_LOCK_POLL_MS;
+    this.baseUrl = normalizeBaseUrl(baseUrl);
+    this.developerBaseUrl = `${this.baseUrl}/developer`;
+    this.authorizationUrl = `${this.baseUrl}/oauth/oauth2/auth`;
+    this.tokenUrl = `${this.baseUrl}/oauth/oauth2/token`;
     this.refreshLockFile = `${this.sessionFile}.refresh.lock`;
     this.session = {
       tokens: null,
@@ -517,7 +532,7 @@ export class WhoopClient {
     });
 
     return {
-      authorizationUrl: `${WHOOP_AUTHORIZATION_URL}?${params.toString()}`,
+      authorizationUrl: `${this.authorizationUrl}?${params.toString()}`,
       state: resolvedState,
       scopes: resolvedScopes,
       scopeText,
@@ -543,7 +558,7 @@ export class WhoopClient {
   }
 
   async #tokenRequest(body) {
-    const response = await this.#fetchWithRetries(WHOOP_TOKEN_URL, {
+    const response = await this.#fetchWithRetries(this.tokenUrl, {
       method: "POST",
       headers: {
         "content-type": "application/x-www-form-urlencoded",
@@ -710,7 +725,7 @@ export class WhoopClient {
     retryOnUnauthorized = true,
   } = {}) {
     const accessToken = await this.#ensureAccessToken();
-    const url = new URL(`${WHOOP_DEVELOPER_BASE_URL}${pathname}`);
+    const url = new URL(`${this.developerBaseUrl}${pathname}`);
 
     if (query && typeof query === "object") {
       for (const [key, value] of Object.entries(query)) {

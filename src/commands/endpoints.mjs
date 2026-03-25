@@ -1,15 +1,12 @@
-function requireId(flagName, value) {
-  const normalized = String(value ?? "").trim();
-  if (!normalized) {
-    throw new Error(`Missing required --${flagName}.`);
-  }
-  return normalized;
-}
+import {
+  formatInvalidFlagValueMessage,
+  resolveRequiredFlagValue,
+} from "../lib/command-input.mjs";
 
-function requireCycleId(value) {
+function requireCycleId(command, value) {
   const numeric = Number(value);
   if (!Number.isInteger(numeric) || numeric < 1) {
-    throw new Error(`Invalid cycle id "${value}". Expected a positive integer.`);
+    throw new Error(formatInvalidFlagValueMessage(command, "cycle-id", value, "a positive integer"));
   }
   return numeric;
 }
@@ -17,7 +14,9 @@ function requireCycleId(value) {
 function requireActivityV1Id(value) {
   const numeric = Number(value);
   if (!Number.isInteger(numeric) || numeric < 1) {
-    throw new Error(`Invalid activity v1 id "${value}". Expected a positive integer.`);
+    throw new Error(
+      formatInvalidFlagValueMessage("activity-map", "activity-v1-id", value, "a positive integer"),
+    );
   }
   return numeric;
 }
@@ -76,49 +75,90 @@ async function writeEndpointPayload(command, record, key, value, flags, deps) {
 }
 
 export async function commandSleepById(flags, deps) {
-  const { withClient } = deps;
+  const { withClient, readStdinText } = deps;
+  const sleepId = await resolveRequiredFlagValue({
+    command: "sleep-by-id",
+    flagName: "sleep-id",
+    flags,
+    readStdinText,
+  });
   const client = await withClient(flags);
-  const sleepId = requireId("sleep-id", flags["sleep-id"]);
   const record = attachLocalDateFields(await client.getSleepById(sleepId), deps);
   await writeEndpointPayload("sleep-by-id", record, "sleepId", sleepId, flags, deps);
 }
 
 export async function commandCycleById(flags, deps) {
-  const { withClient } = deps;
+  const { withClient, readStdinText } = deps;
+  const cycleId = requireCycleId(
+    "cycle-by-id",
+    await resolveRequiredFlagValue({
+      command: "cycle-by-id",
+      flagName: "cycle-id",
+      flags,
+      readStdinText,
+    }),
+  );
   const client = await withClient(flags);
-  const cycleId = requireCycleId(flags["cycle-id"]);
   const record = attachLocalDateFields(await client.getCycleById(cycleId), deps);
   await writeEndpointPayload("cycle-by-id", record, "cycleId", cycleId, flags, deps);
 }
 
 export async function commandActivityMap(flags, deps) {
-  const { withClient } = deps;
+  const { withClient, readStdinText } = deps;
+  const activityV1Id = requireActivityV1Id(
+    await resolveRequiredFlagValue({
+      command: "activity-map",
+      flagName: "activity-v1-id",
+      flags,
+      readStdinText,
+    }),
+  );
   const client = await withClient(flags);
-  const activityV1Id = requireActivityV1Id(flags["activity-v1-id"]);
   const record = await client.getActivityMapping(activityV1Id);
   await writeEndpointPayload("activity-map", record, "activityV1Id", activityV1Id, flags, deps);
 }
 
 export async function commandWorkoutById(flags, deps) {
-  const { withClient } = deps;
+  const { withClient, readStdinText } = deps;
+  const workoutId = await resolveRequiredFlagValue({
+    command: "workout-by-id",
+    flagName: "workout-id",
+    flags,
+    readStdinText,
+  });
   const client = await withClient(flags);
-  const workoutId = requireId("workout-id", flags["workout-id"]);
   const record = attachLocalDateFields(await client.getWorkoutById(workoutId), deps);
   await writeEndpointPayload("workout-by-id", record, "workoutId", workoutId, flags, deps);
 }
 
 export async function commandCycleRecovery(flags, deps) {
-  const { withClient } = deps;
+  const { withClient, readStdinText } = deps;
+  const cycleId = requireCycleId(
+    "cycle-recovery",
+    await resolveRequiredFlagValue({
+      command: "cycle-recovery",
+      flagName: "cycle-id",
+      flags,
+      readStdinText,
+    }),
+  );
   const client = await withClient(flags);
-  const cycleId = requireCycleId(flags["cycle-id"]);
   const record = attachLocalDateFields(await client.getRecoveryForCycle(cycleId), deps);
   await writeEndpointPayload("cycle-recovery", record, "cycleId", cycleId, flags, deps);
 }
 
 export async function commandCycleSleep(flags, deps) {
-  const { withClient } = deps;
+  const { withClient, readStdinText } = deps;
+  const cycleId = requireCycleId(
+    "cycle-sleep",
+    await resolveRequiredFlagValue({
+      command: "cycle-sleep",
+      flagName: "cycle-id",
+      flags,
+      readStdinText,
+    }),
+  );
   const client = await withClient(flags);
-  const cycleId = requireCycleId(flags["cycle-id"]);
   const record = attachLocalDateFields(await client.getSleepForCycle(cycleId), deps);
   await writeEndpointPayload("cycle-sleep", record, "cycleId", cycleId, flags, deps);
 }

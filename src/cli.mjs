@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -8,306 +7,44 @@ import { WhoopClient } from "./whoop-client.mjs";
 import {
   applyAgentRecordFilters,
   hasAgentRecordTransforms,
-  toRecordsOnlyPayload,
 } from "./lib/agent-filters.mjs";
 import {
-  AGENT_FILTER_OPTIONS,
-  AGENT_OUTPUT_OPTIONS,
-  CLI_NAME,
-  COMMAND_FLAG_ALLOWLIST,
-  COMMANDS,
-  FILTERABLE_COMMANDS,
-  GLOBAL_NOTES,
-  PROJECT_NOTICE,
-} from "./lib/command-manifest.mjs";
+  createAgentOutput,
+  toRecordsOnlyPayload,
+} from "./lib/agent-output.mjs";
 import {
-  dateOnlyNowInTimeZone,
+  CLI_NAME,
+} from "./lib/project-info.mjs";
+import {
   formatDateTimeInTimeZone,
-  isoDateShiftInTimeZone,
   normalizeTimeZone,
   parseApiDateTime,
   toDateOnlyInTimeZone,
-  toUtcDateTimeForEndExclusive,
-  toUtcDateTimeForStartOfDay,
 } from "./lib/timezone.mjs";
-import {
-  commandExchangeCode,
-  commandLogin,
-  commandLoginLocal,
-  commandLoginUrl,
-  commandLogout,
-  commandRefreshToken,
-  commandRevoke,
-  commandWhoAmI,
-} from "./commands/auth.mjs";
-import { commandCapabilities, commandDiscover, buildDiscoveryPayload } from "./commands/discovery.mjs";
-import {
-  commandCycles,
-  commandDay,
-  commandRecoveries,
-  commandSleep,
-  commandWorkouts,
-} from "./commands/collections.mjs";
-import {
-  commandActivityMap,
-  commandCycleById,
-  commandCycleRecovery,
-  commandCycleSleep,
-  commandSleepById,
-  commandWorkoutById,
-} from "./commands/endpoints.mjs";
-import { commandBody, commandProfile } from "./commands/user.mjs";
+import { commandRegistry } from "./commands/registry.mjs";
 
 let ACTIVE_TIME_ZONE = normalizeTimeZone();
 
 function printGlobalHelp() {
-  console.log(`${CLI_NAME} (unofficial)`);
-  console.log("");
-  console.log("Usage:");
-  console.log(`  ${CLI_NAME} <command> [flags]`);
-  console.log(`  ${CLI_NAME} help <command>`);
-  console.log("");
-  console.log("Commands:");
-  for (const [name, def] of Object.entries(COMMANDS)) {
-    console.log(`  ${name.padEnd(13)} ${def.summary}`);
-  }
-  console.log("");
-  console.log("Notes:");
-  console.log(`  - ${PROJECT_NOTICE}`);
-  for (const note of GLOBAL_NOTES) console.log(`  - ${note}`);
-  console.log("");
-  console.log("Next steps:");
-  console.log(`  ${CLI_NAME} help workouts`);
-  console.log(`  ${CLI_NAME} discover --level 2`);
-  console.log(`  ${CLI_NAME} workouts --days 14 --json`);
-  console.log("");
-  console.log("Examples:");
-  console.log(`  ${CLI_NAME} login-local --open`);
-  console.log(`  ${CLI_NAME} exchange-code --code <authorization_code> --json`);
-  console.log(`  ${CLI_NAME} whoami --json`);
-  console.log(`  ${CLI_NAME} workouts --days 30 --min-strain 10 --sort strain-desc --json`);
-}
-
-function levenshteinDistance(left, right) {
-  const a = left.toLowerCase();
-  const b = right.toLowerCase();
-  const rows = a.length + 1;
-  const cols = b.length + 1;
-  const matrix = Array.from({ length: rows }, () => new Array(cols).fill(0));
-
-  for (let i = 0; i < rows; i += 1) matrix[i][0] = i;
-  for (let j = 0; j < cols; j += 1) matrix[0][j] = j;
-
-  for (let i = 1; i < rows; i += 1) {
-    for (let j = 1; j < cols; j += 1) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      matrix[i][j] = Math.min(
-        matrix[i - 1][j] + 1,
-        matrix[i][j - 1] + 1,
-        matrix[i - 1][j - 1] + cost,
-      );
-    }
-  }
-
-  return matrix[a.length][b.length];
+  console.log(commandRegistry.formatGlobalHelp());
 }
 
 function getCommandSuggestions(input, max = 3) {
-  const value = String(input ?? "").trim().toLowerCase();
-  if (!value) return [];
-  const commands = Object.keys(COMMANDS);
-
-  const prefixMatches = commands.filter((name) => name.toLowerCase().startsWith(value));
-  if (prefixMatches.length > 0) return prefixMatches.slice(0, max);
-
-  const ranked = commands
-    .map((name) => ({ name, distance: levenshteinDistance(value, name) }))
-    .sort((a, b) => a.distance - b.distance || a.name.localeCompare(b.name));
-
-  const threshold = Math.max(2, Math.floor(value.length / 3));
-  return ranked
-    .filter((item) => item.distance <= threshold)
-    .slice(0, max)
-    .map((item) => item.name);
-}
-
-function getFlagSuggestions(input, allowedFlags, max = 3) {
-  const value = String(input ?? "").trim().replace(/^--/, "").toLowerCase();
-  const candidates = Array.isArray(allowedFlags) ? allowedFlags : Array.from(allowedFlags ?? []);
-  if (!value || candidates.length === 0) return [];
-
-  const prefixMatches = candidates.filter((name) => name.startsWith(value));
-  if (prefixMatches.length > 0) return prefixMatches.slice(0, max);
-
-  const ranked = candidates
-    .map((name) => ({ name, distance: levenshteinDistance(value, name) }))
-    .sort((a, b) => a.distance - b.distance || a.name.localeCompare(b.name));
-
-  const threshold = Math.max(2, Math.floor(value.length / 3));
-  return ranked
-    .filter((item) => item.distance <= threshold)
-    .slice(0, max)
-    .map((item) => item.name);
+  return commandRegistry.getCommandSuggestions(input, max);
 }
 
 function formatUnknownCommandMessage(input) {
-  const suggestions = getCommandSuggestions(input);
-  const lines = [`unknown command "${input}" for "${CLI_NAME}"`];
-  if (suggestions.length === 1) {
-    lines.push("", "Did you mean this?", `  ${suggestions[0]}`);
-  } else if (suggestions.length > 1) {
-    lines.push("", "Did you mean one of these?");
-    for (const suggestion of suggestions) lines.push(`  ${suggestion}`);
-  }
-  lines.push("", `Run "${CLI_NAME} help" for available commands.`);
-  return lines.join("\n");
-}
-
-function formatUnknownFlagMessage(command, unknownFlags, allowedFlags) {
-  const flags = Array.isArray(unknownFlags) ? unknownFlags : [unknownFlags];
-  const normalizedAllowed = Array.from(new Set((allowedFlags ?? []).map((flag) => String(flag)))).sort();
-  const lines = [
-    `unknown flag${flags.length > 1 ? "s" : ""} for "${CLI_NAME} ${command}": ${flags.map((flag) => `--${flag}`).join(", ")}`,
-  ];
-
-  for (const flag of flags) {
-    const suggestions = getFlagSuggestions(flag, normalizedAllowed);
-    if (suggestions.length === 1) {
-      lines.push("", `Did you mean --${suggestions[0]} for --${flag}?`);
-    } else if (suggestions.length > 1) {
-      lines.push("", `Suggestions for --${flag}:`);
-      for (const suggestion of suggestions) lines.push(`  --${suggestion}`);
-    }
-  }
-
-  if (normalizedAllowed.length > 0) {
-    lines.push("", `Allowed flags: ${normalizedAllowed.map((flag) => `--${flag}`).join(", ")}`);
-  } else {
-    lines.push("", "Allowed flags: none");
-  }
-
-  const helpCommand = command === "help" ? `${CLI_NAME} help` : `${CLI_NAME} help ${command}`;
-  lines.push("", `Run "${helpCommand}" for usage.`);
-  return lines.join("\n");
-}
-
-function validateCommandFlags(command, flags) {
-  const allowlist = COMMAND_FLAG_ALLOWLIST[command];
-  if (!allowlist) return { unknownFlags: [] };
-  const unknownFlags = Object.keys(flags).filter((flag) => !allowlist.has(flag));
-  return { unknownFlags, allowlist: Array.from(allowlist) };
+  return commandRegistry.formatUnknownCommand(input);
 }
 
 function printCommandHelp(command, flags = {}) {
-  const def = COMMANDS[command];
-  if (!def) {
-    console.error(formatUnknownCommandMessage(command));
+  const result = commandRegistry.formatCommandHelp(command, flags);
+  if (!result.ok) {
+    console.error(result.text);
     return 1;
   }
-
-  if (flags.json) {
-    const payload = {
-      command,
-      summary: def.summary,
-      usage: def.usage,
-      options: def.options ?? [],
-      examples: def.examples ?? [],
-      stdin: def.stdin ?? null,
-      timezoneOption: "--tz <IANA timezone> (defaults to WHOOP_TIMEZONE or system timezone)",
-      supportsAgentFilters: FILTERABLE_COMMANDS.has(command),
-      agentFilterOptions: FILTERABLE_COMMANDS.has(command) ? AGENT_FILTER_OPTIONS : [],
-      agentOutputOptions: FILTERABLE_COMMANDS.has(command) ? AGENT_OUTPUT_OPTIONS : [],
-      outputModes: ["text", "json", "jsonl", "csv"],
-    };
-    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-    return 0;
-  }
-
-  console.log(`${CLI_NAME} ${command} (unofficial)`);
-  console.log("");
-  console.log(def.summary);
-  console.log(PROJECT_NOTICE);
-  console.log("");
-  console.log("Usage:");
-  for (const line of def.usage) console.log(`  ${line}`);
-  console.log("");
-
-  if (Array.isArray(def.options) && def.options.length > 0) {
-    console.log("Options:");
-    for (const option of def.options) {
-      console.log(`  ${option.flag.padEnd(24)} ${option.description}`);
-    }
-    console.log("");
-  }
-
-  if (FILTERABLE_COMMANDS.has(command)) {
-    console.log("Agent filters:");
-    for (const option of AGENT_FILTER_OPTIONS) {
-      console.log(`  ${option.flag.padEnd(18)} ${option.description}`);
-    }
-    console.log("Agent output options:");
-    for (const option of AGENT_OUTPUT_OPTIONS) {
-      console.log(`  ${option.flag.padEnd(18)} ${option.description}`);
-    }
-    console.log("");
-  }
-
-  if (def.stdin?.description) {
-    console.log("Stdin:");
-    console.log(`  ${def.stdin.description}`);
-    console.log("");
-  }
-
-  if (Array.isArray(def.examples) && def.examples.length > 0) {
-    console.log("Examples:");
-    for (const example of def.examples) console.log(`  ${example}`);
-  }
-
+  process.stdout.write(`${result.text}\n`);
   return 0;
-}
-
-function parseArgs(argv) {
-  const command = argv[2] ?? null;
-  const args = argv.slice(3);
-  const flags = {};
-  const positionals = [];
-
-  for (let i = 0; i < args.length; i += 1) {
-    const part = args[i];
-    if (!part.startsWith("--")) {
-      positionals.push(part);
-      continue;
-    }
-
-    const equalsIndex = part.indexOf("=");
-    if (equalsIndex > 2) {
-      const key = part.slice(2, equalsIndex);
-      const value = part.slice(equalsIndex + 1);
-      flags[key] = value === "" ? true : value;
-      continue;
-    }
-
-    const key = part.slice(2);
-    const next = args[i + 1];
-    if (!next || next.startsWith("--")) {
-      flags[key] = true;
-      continue;
-    }
-
-    flags[key] = next;
-    i += 1;
-  }
-
-  return { command, flags, positionals };
-}
-
-function normalizeDateOnlyInput(value, fallback) {
-  if (value == null || value === "") return fallback;
-  const normalized = String(value).trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
-    throw new Error(`Invalid date "${value}". Expected YYYY-MM-DD.`);
-  }
-  return normalized;
 }
 
 function requireNumber(value, fallback) {
@@ -321,150 +58,6 @@ function requirePositiveInteger(value, fallback) {
   const parsed = requireNumber(value, fallback);
   if (!Number.isInteger(parsed) || parsed < 1) return fallback;
   return parsed;
-}
-
-function isJsonMode(flags) {
-  return Boolean(flags.json || flags.jsonl || flags.csv);
-}
-
-function isoDateShift(days) {
-  return isoDateShiftInTimeZone(days, ACTIVE_TIME_ZONE);
-}
-
-function withTimeZoneMeta(payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
-  if (payload.timeZone != null) return payload;
-  return { ...payload, timeZone: ACTIVE_TIME_ZONE };
-}
-
-async function writeOutput(payload, flags, textRenderer = null) {
-  const payloadWithTimeZone = withTimeZoneMeta(payload);
-
-  if (flags.csv) {
-    const splitCsv = (value) => {
-      if (value == null || value === true) return [];
-      return String(value)
-        .split(",")
-        .map((part) => part.trim())
-        .filter(Boolean);
-    };
-
-    const getByPath = (object, pathValue) => {
-      const segments = String(pathValue ?? "")
-        .split(".")
-        .map((part) => part.trim())
-        .filter(Boolean);
-      if (segments.length === 0) return undefined;
-      let cursor = object;
-      for (const segment of segments) {
-        if (cursor == null || typeof cursor !== "object") return undefined;
-        cursor = cursor[segment];
-      }
-      return cursor;
-    };
-
-    const records = Array.isArray(payloadWithTimeZone?.records)
-      ? payloadWithTimeZone.records
-      : Array.isArray(payloadWithTimeZone)
-        ? payloadWithTimeZone
-        : payloadWithTimeZone?.record && typeof payloadWithTimeZone.record === "object"
-          ? [payloadWithTimeZone.record]
-          : payloadWithTimeZone && typeof payloadWithTimeZone === "object"
-            ? [payloadWithTimeZone]
-            : [];
-
-    const fields = splitCsv(flags.fields);
-    const headers =
-      fields.length > 0
-        ? fields
-        : Array.from(
-          records.reduce((set, item) => {
-            if (item && typeof item === "object" && !Array.isArray(item)) {
-              for (const key of Object.keys(item)) set.add(key);
-            }
-            return set;
-          }, new Set()),
-        );
-
-    const formatCell = (value) => {
-      if (value == null) return "";
-      if (typeof value === "string") {
-        if (/[",\n\r]/.test(value)) return `"${value.replace(/"/g, "\"\"")}"`;
-        return value;
-      }
-      if (typeof value === "number" || typeof value === "boolean") return String(value);
-      const json = JSON.stringify(value);
-      if (json == null) return "";
-      if (/[",\n\r]/.test(json)) return `"${json.replace(/"/g, "\"\"")}"`;
-      return json;
-    };
-
-    const rows = [];
-    if (headers.length > 0) {
-      rows.push(headers.map((header) => formatCell(header)).join(","));
-      for (const record of records) {
-        const line = headers
-          .map((header) => {
-            const value =
-              record && typeof record === "object"
-                ? fields.length > 0
-                  ? getByPath(record, header)
-                  : record[header]
-                : undefined;
-            return formatCell(value);
-          })
-          .join(",");
-        rows.push(line);
-      }
-    }
-
-    const content = rows.join("\n");
-    if (flags.output) {
-      await fs.writeFile(flags.output, `${content}${content ? "\n" : ""}`, "utf8");
-      console.log(`Wrote CSV to ${flags.output}`);
-      return;
-    }
-    if (content) console.log(content);
-    return;
-  }
-
-  if (flags.jsonl) {
-    const records = Array.isArray(payloadWithTimeZone?.records)
-      ? payloadWithTimeZone.records
-      : Array.isArray(payloadWithTimeZone)
-        ? payloadWithTimeZone
-        : [];
-    const content = records.map((item) => JSON.stringify(item)).join("\n");
-    if (flags.output) {
-      await fs.writeFile(flags.output, `${content}${content ? "\n" : ""}`, "utf8");
-      console.log(`Wrote JSONL to ${flags.output}`);
-      return;
-    }
-    if (content) console.log(content);
-    return;
-  }
-
-  if (flags.json || typeof payloadWithTimeZone !== "string") {
-    const content =
-      typeof payloadWithTimeZone === "string"
-        ? payloadWithTimeZone
-        : `${JSON.stringify(payloadWithTimeZone, null, 2)}\n`;
-    if (flags.output) {
-      await fs.writeFile(flags.output, content, "utf8");
-      console.log(`Wrote JSON to ${flags.output}`);
-      return;
-    }
-    process.stdout.write(content);
-    return;
-  }
-
-  const text = textRenderer ? textRenderer(payloadWithTimeZone) : String(payloadWithTimeZone);
-  if (flags.output) {
-    await fs.writeFile(flags.output, `${text}\n`, "utf8");
-    console.log(`Wrote text to ${flags.output}`);
-    return;
-  }
-  console.log(text);
 }
 
 async function withClient(flags) {
@@ -502,7 +95,9 @@ function sortByDateDesc(records) {
 }
 
 async function main() {
-  const { command, flags, positionals } = parseArgs(process.argv);
+  const parsedArgs = commandRegistry.parseArgv(process.argv);
+  const { command, positionals } = parsedArgs;
+  let { flags } = parsedArgs;
   let stdinTextPromise = null;
 
   const readStdinText = async () => {
@@ -527,15 +122,19 @@ async function main() {
     process.exit(0);
   }
 
-  if (!COMMANDS[command]) {
+  if (!commandRegistry.has(command)) {
     console.error(formatUnknownCommandMessage(command));
     process.exit(1);
   }
 
-  const { unknownFlags, allowlist } = validateCommandFlags(command, flags);
-  if (unknownFlags.length > 0) {
-    console.error(formatUnknownFlagMessage(command, unknownFlags, allowlist));
-    process.exit(1);
+  try {
+    flags = commandRegistry.acceptFlags(command, flags);
+  } catch (error) {
+    if (error?.code === "WHOOP_CLI_UNKNOWN_FLAGS") {
+      console.error(error.message);
+      process.exit(1);
+    }
+    throw error;
   }
 
   ACTIVE_TIME_ZONE = normalizeTimeZone(flags.tz ?? null);
@@ -546,7 +145,7 @@ async function main() {
       process.exit(printCommandHelp(positionals[0], flags));
     }
     if (flags.json) {
-      const payload = buildDiscoveryPayload(2, null);
+      const payload = commandRegistry.buildDiscoveryPayload(2, null);
       process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
       process.exit(0);
     }
@@ -559,101 +158,25 @@ async function main() {
   }
 
   const commandDeps = {
+    agentOutput: createAgentOutput({ timeZone: () => ACTIVE_TIME_ZONE }),
+    commandRegistry,
     timeZone: ACTIVE_TIME_ZONE,
     applyAgentRecordFilters,
     toRecordsOnlyPayload,
     hasAgentRecordTransforms,
     readStdinText,
-    isJsonMode,
-    writeOutput,
     requirePositiveInteger,
-    requireNumber,
-    normalizeDateOnlyInput,
-    isoDateShift,
     withClient,
     sortByDateAsc,
     sortByDateDesc,
-    dateOnlyNowInTimeZone,
     parseApiDateTime,
     toDateOnlyInTimeZone,
     formatDateTimeInTimeZone,
-    toUtcDateTimeForStartOfDay,
-    toUtcDateTimeForEndExclusive,
   };
+  commandDeps.isJsonMode = commandDeps.agentOutput.isJsonMode;
+  commandDeps.writeOutput = commandDeps.agentOutput.writeOutput;
 
-  switch (command) {
-    case "discover":
-      await commandDiscover(flags, commandDeps);
-      return;
-    case "capabilities":
-      await commandCapabilities(flags, commandDeps);
-      return;
-    case "login-url":
-      await commandLoginUrl(flags, commandDeps);
-      return;
-    case "login":
-      await commandLogin(flags, commandDeps);
-      return;
-    case "login-local":
-      await commandLoginLocal(flags, commandDeps);
-      return;
-    case "exchange-code":
-      await commandExchangeCode(flags, commandDeps);
-      return;
-    case "refresh-token":
-      await commandRefreshToken(flags, commandDeps);
-      return;
-    case "whoami":
-      await commandWhoAmI(flags, commandDeps);
-      return;
-    case "profile":
-      await commandProfile(flags, commandDeps);
-      return;
-    case "body":
-      await commandBody(flags, commandDeps);
-      return;
-    case "cycles":
-      await commandCycles(flags, commandDeps);
-      return;
-    case "recoveries":
-      await commandRecoveries(flags, commandDeps);
-      return;
-    case "sleep":
-      await commandSleep(flags, commandDeps);
-      return;
-    case "workouts":
-      await commandWorkouts(flags, commandDeps);
-      return;
-    case "cycle-by-id":
-      await commandCycleById(flags, commandDeps);
-      return;
-    case "activity-map":
-      await commandActivityMap(flags, commandDeps);
-      return;
-    case "sleep-by-id":
-      await commandSleepById(flags, commandDeps);
-      return;
-    case "workout-by-id":
-      await commandWorkoutById(flags, commandDeps);
-      return;
-    case "cycle-recovery":
-      await commandCycleRecovery(flags, commandDeps);
-      return;
-    case "cycle-sleep":
-      await commandCycleSleep(flags, commandDeps);
-      return;
-    case "day":
-      await commandDay(flags, commandDeps);
-      return;
-    case "revoke":
-      await commandRevoke(flags, commandDeps);
-      return;
-    case "logout":
-      await commandLogout(flags, commandDeps);
-      return;
-    default:
-      throw new Error(`Unhandled command: ${command}`);
-  }
+  await commandRegistry.run(command, { flags, deps: commandDeps, acceptedFlags: true });
 }
 
 main().catch((error) => {

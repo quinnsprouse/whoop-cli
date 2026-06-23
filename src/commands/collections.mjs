@@ -1,12 +1,15 @@
-function normalizeDateTimeInput(value, label) {
-  if (value == null || value === "") return null;
-  const normalized = String(value).trim();
-  const parsed = new Date(normalized);
-  if (!Number.isFinite(parsed.getTime())) {
-    throw new Error(`Invalid ${label} "${value}". Expected ISO date-time.`);
-  }
-  return parsed.toISOString();
-}
+import {
+  AUTH_CLIENT_OPTIONS,
+  COLLECTION_WINDOW_OPTIONS,
+  STRUCTURED_OUTPUT_OPTIONS,
+  TIMEZONE_OPTION,
+  option,
+} from "../lib/command-options.mjs";
+import {
+  buildLocalDayQueryWindow,
+  buildSingleLocalDayQueryWindow,
+} from "../lib/local-day-query-window.mjs";
+import { CLI_NAME } from "../lib/project-info.mjs";
 
 function toBoolean(value, fallback = false) {
   if (value == null) return fallback;
@@ -84,52 +87,6 @@ function normalizeWorkoutRecords(records, deps) {
   });
 }
 
-function buildWindow(flags, deps, defaultDays = 30) {
-  const {
-    requirePositiveInteger,
-    normalizeDateOnlyInput,
-    isoDateShift,
-    toUtcDateTimeForStartOfDay,
-    toUtcDateTimeForEndExclusive,
-  } = deps;
-
-  const explicitStart = normalizeDateTimeInput(flags.start, "--start");
-  const explicitEnd = normalizeDateTimeInput(flags.end, "--end");
-
-  if (explicitStart || explicitEnd) {
-    if (!explicitStart || !explicitEnd) {
-      throw new Error("--start and --end must be provided together.");
-    }
-    if (explicitEnd <= explicitStart) {
-      throw new Error(`Invalid range: --end (${explicitEnd}) must be after --start (${explicitStart}).`);
-    }
-    return {
-      days: null,
-      fromDate: null,
-      toDate: null,
-      start: explicitStart,
-      end: explicitEnd,
-      source: "explicit-datetime",
-    };
-  }
-
-  const days = requirePositiveInteger(flags.days, defaultDays);
-  const fromDate = normalizeDateOnlyInput(flags.from, isoDateShift(-days));
-  const toDate = normalizeDateOnlyInput(flags.to, isoDateShift(0));
-  if (toDate < fromDate) {
-    throw new Error(`Invalid range: --to (${toDate}) is before --from (${fromDate}).`);
-  }
-
-  return {
-    days,
-    fromDate,
-    toDate,
-    start: toUtcDateTimeForStartOfDay(fromDate),
-    end: toUtcDateTimeForEndExclusive(toDate),
-    source: "local-date-window",
-  };
-}
-
 function formatCollectionText(value, deps) {
   const { hasAgentRecordTransforms, hasTransforms } = deps;
   const lines = [
@@ -165,7 +122,6 @@ function formatCollectionText(value, deps) {
 async function runCollectionCommand(command, endpointName, normalizeRecords, flags, deps) {
   const {
     withClient,
-    requirePositiveInteger,
     applyAgentRecordFilters,
     toRecordsOnlyPayload,
     isJsonMode,
@@ -174,8 +130,12 @@ async function runCollectionCommand(command, endpointName, normalizeRecords, fla
   } = deps;
 
   const client = await withClient(flags);
-  const queryWindow = buildWindow(flags, deps, 30);
-  const limitRaw = requirePositiveInteger(flags.limit, 25);
+  const queryWindow = buildLocalDayQueryWindow({
+    flags,
+    timeZone: deps.timeZone,
+    defaultDays: 30,
+  });
+  const limitRaw = flags.limit ?? 25;
   const limit = Math.max(1, Math.min(limitRaw, 25));
   const allPages = toBoolean(flags["all-pages"], false);
   const nextToken = flags["next-token"] ? String(flags["next-token"]).trim() : null;
@@ -206,6 +166,7 @@ async function runCollectionCommand(command, endpointName, normalizeRecords, fla
       toDate: queryWindow.toDate,
       start: queryWindow.start,
       end: queryWindow.end,
+      timeZone: queryWindow.timeZone,
       limit,
       allPages,
       nextToken,
@@ -260,18 +221,16 @@ function average(values) {
 export async function commandDay(flags, deps) {
   const {
     withClient,
-    normalizeDateOnlyInput,
-    isoDateShift,
-    toUtcDateTimeForStartOfDay,
-    toUtcDateTimeForEndExclusive,
     isJsonMode,
     writeOutput,
   } = deps;
 
   const client = await withClient(flags);
-  const date = normalizeDateOnlyInput(flags.date, isoDateShift(0));
-  const start = toUtcDateTimeForStartOfDay(date);
-  const end = toUtcDateTimeForEndExclusive(date);
+  const queryWindow = buildSingleLocalDayQueryWindow({
+    date: flags.date,
+    timeZone: deps.timeZone,
+  });
+  const { date, start, end } = queryWindow;
 
   const [cycles, recoveries, sleep, workouts] = await Promise.all([
     client.getCollection("cycles", { start, end, limit: 25, allPages: true }),
@@ -290,7 +249,12 @@ export async function commandDay(flags, deps) {
     generatedAt: new Date().toISOString(),
     command: "day",
     date,
-    query: { start, end },
+    query: {
+      source: queryWindow.source,
+      start,
+      end,
+      timeZone: queryWindow.timeZone,
+    },
     summary: {
       cycleCount: cycleRecords.length,
       recoveryCount: recoveryRecords.length,
@@ -337,3 +301,104 @@ export async function commandDay(flags, deps) {
 
   await writeOutput(payload, { ...flags, json: !flags.jsonl });
 }
+
+export const collectionCommandRegistrations = {
+  cycles: {
+    name: "cycles",
+    summary: "List cycle records in a date window.",
+    agentFilters: true,
+    usage: [
+      `${CLI_NAME} cycles [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl|--csv]`,
+    ],
+    options: [
+      ...AUTH_CLIENT_OPTIONS,
+      ...COLLECTION_WINDOW_OPTIONS,
+      ...STRUCTURED_OUTPUT_OPTIONS,
+      TIMEZONE_OPTION,
+    ],
+    examples: [
+      `${CLI_NAME} cycles --days 14 --json`,
+      `${CLI_NAME} cycles --from 2026-03-01 --to 2026-03-25 --all-pages --jsonl`,
+      `${CLI_NAME} cycles --days 30 --min-strain 10 --sort strain-desc --json`,
+    ],
+    handler: commandCycles,
+  },
+  recoveries: {
+    name: "recoveries",
+    summary: "List recovery records in a date window.",
+    agentFilters: true,
+    usage: [
+      `${CLI_NAME} recoveries [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl|--csv]`,
+    ],
+    options: [
+      ...AUTH_CLIENT_OPTIONS,
+      ...COLLECTION_WINDOW_OPTIONS,
+      ...STRUCTURED_OUTPUT_OPTIONS,
+      TIMEZONE_OPTION,
+    ],
+    examples: [
+      `${CLI_NAME} recoveries --days 30 --json`,
+      `${CLI_NAME} recoveries --days 60 --max-recovery 40 --sort recovery --jsonl`,
+      `${CLI_NAME} recoveries --from 2026-03-01 --to 2026-03-25 --fields cycle_id,score.recovery_score --csv`,
+    ],
+    handler: commandRecoveries,
+  },
+  sleep: {
+    name: "sleep",
+    summary: "List sleep records in a date window.",
+    agentFilters: true,
+    usage: [
+      `${CLI_NAME} sleep [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl|--csv]`,
+    ],
+    options: [
+      ...AUTH_CLIENT_OPTIONS,
+      ...COLLECTION_WINDOW_OPTIONS,
+      ...STRUCTURED_OUTPUT_OPTIONS,
+      TIMEZONE_OPTION,
+    ],
+    examples: [
+      `${CLI_NAME} sleep --days 14 --json`,
+      `${CLI_NAME} sleep --from 2026-03-01 --to 2026-03-25 --fields id,start,end,score.sleep_performance_percentage --json`,
+      `${CLI_NAME} sleep --days 30 --type nap --jsonl`,
+    ],
+    handler: commandSleep,
+  },
+  workouts: {
+    name: "workouts",
+    summary: "List workout records in a date window.",
+    agentFilters: true,
+    usage: [
+      `${CLI_NAME} workouts [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl|--csv]`,
+    ],
+    options: [
+      ...AUTH_CLIENT_OPTIONS,
+      ...COLLECTION_WINDOW_OPTIONS,
+      ...STRUCTURED_OUTPUT_OPTIONS,
+      TIMEZONE_OPTION,
+    ],
+    examples: [
+      `${CLI_NAME} workouts --days 14 --json`,
+      `${CLI_NAME} workouts --days 30 --min-strain 12 --sort strain-desc --result-limit 20 --json`,
+      `${CLI_NAME} workouts --from 2026-03-01 --to 2026-03-25 --fields id,start,sport_name,score.strain --csv`,
+    ],
+    handler: commandWorkouts,
+  },
+  day: {
+    name: "day",
+    summary: "Fetch one local-day snapshot across cycles, recoveries, sleep, and workouts.",
+    usage: [`${CLI_NAME} day [--date YYYY-MM-DD] [--include-records] [--json|--csv]`],
+    options: [
+      ...AUTH_CLIENT_OPTIONS,
+      option("--date <YYYY-MM-DD>", "Local day to summarize (default: today in the active timezone)."),
+      option("--include-records", "Include raw collection payloads in the day snapshot."),
+      ...STRUCTURED_OUTPUT_OPTIONS,
+      TIMEZONE_OPTION,
+    ],
+    examples: [
+      `${CLI_NAME} day --json`,
+      `${CLI_NAME} day --date 2026-03-25 --include-records --json`,
+      `${CLI_NAME} day --date 2026-03-25 --csv`,
+    ],
+    handler: commandDay,
+  },
+};

@@ -1,4 +1,11 @@
+import { AGENT_FILTER_OPTIONS } from "./command-options.mjs";
+import {
+  projectRecordFields,
+  splitCsv,
+} from "./agent-output.mjs";
 import { normalizeTimeZone, toDateOnlyInTimeZone } from "./timezone.mjs";
+
+const AGENT_FILTER_OPTION_NAMES = AGENT_FILTER_OPTIONS.map((option) => option.name);
 
 function normalizeDateOnlyInput(value, fallback) {
   if (value == null || value === "") return fallback;
@@ -22,40 +29,9 @@ function requirePositiveInteger(value, fallback) {
   return parsed;
 }
 
-function splitCsv(value) {
-  if (value == null || value === true) return [];
-  return String(value)
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-}
-
 function toLowerOrNull(value) {
   if (value == null) return null;
   return String(value).toLowerCase();
-}
-
-function getByPath(object, pathValue) {
-  if (!pathValue) return undefined;
-  const segments = String(pathValue)
-    .split(".")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  let cursor = object;
-  for (const segment of segments) {
-    if (cursor == null || typeof cursor !== "object") return undefined;
-    cursor = cursor[segment];
-  }
-  return cursor;
-}
-
-function projectRecordFields(record, fields) {
-  const output = {};
-  for (const field of fields) {
-    const value = getByPath(record, field);
-    output[field] = value === undefined ? null : value;
-  }
-  return output;
 }
 
 function resolveRecordDateOnly(record, timeZone) {
@@ -297,31 +273,5 @@ export function applyAgentRecordFilters(records, flags, timeZone = null) {
 }
 
 export function hasAgentRecordTransforms(flags) {
-  return Boolean(
-    flags.from ||
-      flags.to ||
-      flags.type ||
-      flags.contains ||
-      flags["min-strain"] ||
-      flags["max-strain"] ||
-      flags["min-recovery"] ||
-      flags["max-recovery"] ||
-      flags.sort ||
-      flags["result-limit"] ||
-      flags.fields,
-  );
-}
-
-export function toRecordsOnlyPayload(payload) {
-  return {
-    mode: payload?.mode ?? null,
-    generatedAt: payload?.generatedAt ?? new Date().toISOString(),
-    command: payload?.command ?? null,
-    query: payload?.query ?? null,
-    filters: payload?.filters ?? null,
-    member: payload?.member ?? null,
-    count: Array.isArray(payload?.records) ? payload.records.length : payload?.count ?? 0,
-    records: Array.isArray(payload?.records) ? payload.records : [],
-    limitations: payload?.limitations ?? undefined,
-  };
+  return AGENT_FILTER_OPTION_NAMES.some((name) => flags?.[name] != null && flags[name] !== false);
 }

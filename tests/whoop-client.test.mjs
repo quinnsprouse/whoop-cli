@@ -243,3 +243,33 @@ test("cycle-by-id and activity-map methods call expected endpoints", async () =>
     await assert.rejects(() => client.getActivityMapping(0), /positive integer/i);
   });
 });
+
+test("sleep stream method calls stream endpoint with selected types", async () => {
+  await withTempDir(async (tmpDir) => {
+    const sessionFile = path.join(tmpDir, "session.json");
+    await writeSession(
+      sessionFile,
+      buildToken({ accessToken: "valid-token", refreshToken: "refresh-token", expiresAt: futureIso() }),
+    );
+
+    const seenUrls = [];
+    const fetchImpl = async (url) => {
+      const href = String(url);
+      seenUrls.push(href);
+      if (href.endsWith("/developer/v2/activity/sleep/sleep-1/stream?types=hr&types=skin_temp")) {
+        return jsonResponse({ algorithm_version: "v1", stream: [{ timestamp: "2026-03-20T01:00:00Z", hr: 54 }] });
+      }
+      throw new Error(`Unexpected URL: ${href}`);
+    };
+
+    const client = makeClient(sessionFile, fetchImpl);
+    await client.loadSession();
+
+    const stream = await client.getSleepStream("sleep-1", { types: "hr,skin_temp" });
+
+    assert.equal(stream.algorithm_version, "v1");
+    assert.equal(stream.stream[0].hr, 54);
+    assert.equal(seenUrls.length, 1);
+    await assert.rejects(() => client.getSleepStream(""), /sleepId is required/i);
+  });
+});

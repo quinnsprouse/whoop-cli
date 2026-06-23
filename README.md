@@ -8,7 +8,7 @@ CLI to authenticate with the official WHOOP API and query your account data, inc
 - one-step local OAuth callback capture (`login-local`)
 - profile and body measurements
 - cycles, recoveries, sleep, and workouts collections
-- endpoint lookups: `cycle-by-id`, `activity-map`, `sleep-by-id`, `workout-by-id`, `cycle-recovery`, `cycle-sleep`
+- endpoint lookups: `cycle-by-id`, `activity-map`, `sleep-by-id`, `sleep-stream`, `workout-by-id`, `cycle-recovery`, `cycle-sleep`
 - day snapshot across core WHOOP datasets
 - agent-friendly filtering, field projection, and JSON/JSONL/CSV output
 - per-command help with concrete examples and progressive discovery
@@ -99,6 +99,7 @@ whoop-query-cli day --date 2026-02-24 --include-records --json
 
 ```bash
 whoop-query-cli sleep-by-id --sleep-id <uuid> --json
+whoop-query-cli sleep-stream --sleep-id <uuid> --types hr,skin_temp --json
 whoop-query-cli workout-by-id --workout-id <uuid> --json
 whoop-query-cli cycle-by-id --cycle-id <int> --json
 whoop-query-cli activity-map --activity-v1-id <int> --json

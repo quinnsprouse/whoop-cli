@@ -19,7 +19,7 @@ function toDateTimeParts(date, timeZone) {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    hour12: false,
+    hourCycle: "h23",
     timeZoneName: "shortOffset",
   });
   return formatter.formatToParts(date);
@@ -33,6 +33,63 @@ function toDateOnlyParts(date, timeZone) {
     day: "2-digit",
   });
   return formatter.formatToParts(date);
+}
+
+function parseDateOnlyParts(value) {
+  const text = String(value ?? "").trim();
+  if (!DATE_ONLY_PATTERN.test(text)) return null;
+  const [year, month, day] = text.split("-").map((part) => Number(part));
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+    return null;
+  }
+  return { year, month, day };
+}
+
+function getTimeZoneOffsetMs(date, timeZone) {
+  const parts = toDateTimeParts(date, timeZone);
+  const year = Number(pickPart(parts, "year"));
+  const month = Number(pickPart(parts, "month"));
+  const day = Number(pickPart(parts, "day"));
+  const hour = Number(pickPart(parts, "hour"));
+  const minute = Number(pickPart(parts, "minute"));
+  const second = Number(pickPart(parts, "second"));
+  if (![year, month, day, hour, minute, second].every(Number.isFinite)) return 0;
+
+  const localAsUtc = Date.UTC(year, month - 1, day, hour, minute, second);
+  return localAsUtc - date.getTime();
+}
+
+function toUtcDateTimeForLocalDateTime({
+  dateOnly,
+  timeZone,
+  hour = 0,
+  minute = 0,
+  second = 0,
+  millisecond = 0,
+}) {
+  const parts = parseDateOnlyParts(dateOnly);
+  if (!parts) return null;
+
+  const normalizedTimeZone = normalizeTimeZone(timeZone, "UTC");
+  const localAsUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    hour,
+    minute,
+    second,
+    millisecond,
+  );
+
+  let candidate = new Date(localAsUtc);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const offsetMs = getTimeZoneOffsetMs(candidate, normalizedTimeZone);
+    const next = new Date(localAsUtc - offsetMs);
+    if (next.getTime() === candidate.getTime()) break;
+    candidate = next;
+  }
+
+  return candidate.toISOString();
 }
 
 export function normalizeTimeZone(value = null, fallback = null) {
@@ -133,24 +190,23 @@ export function shiftDateOnly(dateOnly, days) {
   return parsed.toISOString().slice(0, 10);
 }
 
-export function dateOnlyNowInTimeZone(timeZone) {
-  return toDateOnlyInTimeZone(new Date(), normalizeTimeZone(timeZone), {
+export function dateOnlyNowInTimeZone(timeZone, now = new Date()) {
+  return toDateOnlyInTimeZone(now, normalizeTimeZone(timeZone), {
     assumeUtcForOffsetlessDateTime: false,
   });
 }
 
-export function isoDateShiftInTimeZone(days, timeZone) {
-  const today = dateOnlyNowInTimeZone(timeZone);
+export function isoDateShiftInTimeZone(days, timeZone, now = new Date()) {
+  const today = dateOnlyNowInTimeZone(timeZone, now);
   return shiftDateOnly(today, days);
 }
 
-export function toUtcDateTimeForStartOfDay(dateOnly) {
-  if (!DATE_ONLY_PATTERN.test(String(dateOnly ?? ""))) return null;
-  return `${dateOnly}T00:00:00.000Z`;
+export function toUtcDateTimeForStartOfDay(dateOnly, timeZone = "UTC") {
+  return toUtcDateTimeForLocalDateTime({ dateOnly, timeZone });
 }
 
-export function toUtcDateTimeForEndExclusive(dateOnly) {
+export function toUtcDateTimeForEndExclusive(dateOnly, timeZone = "UTC") {
   if (!DATE_ONLY_PATTERN.test(String(dateOnly ?? ""))) return null;
   const next = shiftDateOnly(dateOnly, 1);
-  return `${next}T00:00:00.000Z`;
+  return toUtcDateTimeForStartOfDay(next, timeZone);
 }

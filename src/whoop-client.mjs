@@ -730,6 +730,13 @@ export class WhoopClient {
     if (query && typeof query === "object") {
       for (const [key, value] of Object.entries(query)) {
         if (value == null || value === "") continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item == null || item === "") continue;
+            url.searchParams.append(key, String(item));
+          }
+          continue;
+        }
         url.searchParams.set(key, String(value));
       }
     }
@@ -824,6 +831,18 @@ export class WhoopClient {
     const id = String(sleepId ?? "").trim();
     if (!id) throw new Error("sleepId is required.");
     const response = await this.request(`/v2/activity/sleep/${encodeURIComponent(id)}`);
+    return response.data;
+  }
+
+  async getSleepStream(sleepId, { types = null } = {}) {
+    const id = String(sleepId ?? "").trim();
+    if (!id) throw new Error("sleepId is required.");
+
+    const normalizedTypes = splitScopes(types);
+    const query = normalizedTypes.length > 0 ? { types: normalizedTypes } : null;
+    const response = await this.request(`/v2/activity/sleep/${encodeURIComponent(id)}/stream`, {
+      query,
+    });
     return response.data;
   }
 

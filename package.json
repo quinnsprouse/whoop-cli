@@ -1,6 +1,6 @@
 {
   "name": "whoop-query-cli",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Unofficial CLI for authenticating with WHOOP and querying v2 user data",
   "main": "src/cli.mjs",
   "bin": {
@@ -33,6 +33,7 @@
     "cycle-by-id": "node src/cli.mjs cycle-by-id",
     "activity-map": "node src/cli.mjs activity-map",
     "sleep-by-id": "node src/cli.mjs sleep-by-id",
+    "sleep-stream": "node src/cli.mjs sleep-stream",
     "workout-by-id": "node src/cli.mjs workout-by-id",
     "cycle-recovery": "node src/cli.mjs cycle-recovery",
     "cycle-sleep": "node src/cli.mjs cycle-sleep",

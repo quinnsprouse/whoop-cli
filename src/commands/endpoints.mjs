@@ -2,23 +2,37 @@ import {
   formatInvalidFlagValueMessage,
   resolveRequiredFlagValue,
 } from "../lib/command-input.mjs";
+import {
+  AUTH_CLIENT_OPTIONS,
+  STDIN_OPTION,
+  STRUCTURED_OUTPUT_OPTIONS,
+  TIMEZONE_OPTION,
+  option,
+} from "../lib/command-options.mjs";
+import { CLI_NAME } from "../lib/project-info.mjs";
 
-function requireCycleId(command, value) {
+function requirePositiveIntegerFlag(value, {
+  command,
+  flagName,
+  commandRegistry = null,
+}) {
   const numeric = Number(value);
   if (!Number.isInteger(numeric) || numeric < 1) {
-    throw new Error(formatInvalidFlagValueMessage(command, "cycle-id", value, "a positive integer"));
+    throw new Error(
+      formatInvalidFlagValueMessage(
+        command,
+        flagName,
+        value,
+        "a positive integer",
+        commandRegistry,
+      ),
+    );
   }
   return numeric;
 }
 
-function requireActivityV1Id(value) {
-  const numeric = Number(value);
-  if (!Number.isInteger(numeric) || numeric < 1) {
-    throw new Error(
-      formatInvalidFlagValueMessage("activity-map", "activity-v1-id", value, "a positive integer"),
-    );
-  }
-  return numeric;
+function identity(value) {
+  return value;
 }
 
 function attachLocalDateFields(record, deps) {
@@ -74,91 +88,241 @@ async function writeEndpointPayload(command, record, key, value, flags, deps) {
   await writeOutput(payload, { ...flags, json: !flags.jsonl });
 }
 
-export async function commandSleepById(flags, deps) {
-  const { withClient, readStdinText } = deps;
-  const sleepId = await resolveRequiredFlagValue({
-    command: "sleep-by-id",
-    flagName: "sleep-id",
-    flags,
-    readStdinText,
-  });
-  const client = await withClient(flags);
-  const record = attachLocalDateFields(await client.getSleepById(sleepId), deps);
-  await writeEndpointPayload("sleep-by-id", record, "sleepId", sleepId, flags, deps);
+function commandInvocation(command, args) {
+  return [CLI_NAME, command, ...args].filter(Boolean).join(" ");
 }
 
-export async function commandCycleById(flags, deps) {
-  const { withClient, readStdinText } = deps;
-  const cycleId = requireCycleId(
-    "cycle-by-id",
-    await resolveRequiredFlagValue({
-      command: "cycle-by-id",
-      flagName: "cycle-id",
+function stdinExample(command, value, args) {
+  return `printf '%s\\n' "${value}" | ${commandInvocation(command, ["--stdin", ...args])}`;
+}
+
+function buildEndpointOptions({
+  flagName,
+  valueLabel,
+  description,
+  schema = {},
+  extraOptions = [],
+  localDateFields = false,
+}) {
+  const options = [
+    ...AUTH_CLIENT_OPTIONS,
+    option(`--${flagName} <${valueLabel}>`, description, schema),
+    ...extraOptions,
+    STDIN_OPTION,
+    ...STRUCTURED_OUTPUT_OPTIONS,
+  ];
+
+  if (localDateFields) options.push(TIMEZONE_OPTION);
+  return options;
+}
+
+function createEndpointCommandRegistration({
+  name,
+  summary,
+  input,
+  outputKey,
+  fetchRecord,
+  localDateFields = false,
+  extraOptions = [],
+  directUsageArgs = [],
+  stdinUsageArgs = [],
+  directExampleArgs = [],
+  stdinExampleArgs = [],
+}) {
+  const directJsonExampleArgs = [
+    `--${input.flagName}`,
+    input.example,
+    ...directExampleArgs,
+    "--json",
+  ];
+  const stdinJsonExampleArgs = [...stdinExampleArgs, "--json"];
+
+  async function handler(flags, deps) {
+    const { withClient, readStdinText, commandRegistry } = deps;
+    const rawValue = await resolveRequiredFlagValue({
+      command: name,
+      flagName: input.flagName,
       flags,
       readStdinText,
+      commandRegistry,
+    });
+    const value = (input.parse ?? identity)(rawValue, {
+      command: name,
+      flagName: input.flagName,
+      commandRegistry,
+    });
+    const client = await withClient(flags);
+    const rawRecord = await fetchRecord({ client, value, flags, deps });
+    const record = localDateFields ? attachLocalDateFields(rawRecord, deps) : rawRecord;
+    await writeEndpointPayload(name, record, outputKey, value, flags, deps);
+  }
+
+  return {
+    name,
+    summary,
+    usage: [
+      commandInvocation(name, [
+        `--${input.flagName}`,
+        `<${input.valueLabel}>`,
+        ...directUsageArgs,
+        "[--json|--csv]",
+      ]),
+      commandInvocation(name, ["--stdin", ...stdinUsageArgs, "[--json|--csv]"]),
+    ],
+    options: buildEndpointOptions({
+      flagName: input.flagName,
+      valueLabel: input.valueLabel,
+      description: input.description,
+      schema: input.schema,
+      extraOptions,
+      localDateFields,
     }),
-  );
-  const client = await withClient(flags);
-  const record = attachLocalDateFields(await client.getCycleById(cycleId), deps);
-  await writeEndpointPayload("cycle-by-id", record, "cycleId", cycleId, flags, deps);
+    examples: [
+      commandInvocation(name, directJsonExampleArgs),
+      stdinExample(name, input.example, stdinJsonExampleArgs),
+    ],
+    stdin: {
+      description: input.stdinDescription,
+      examples: [stdinExample(name, input.example, stdinJsonExampleArgs)],
+    },
+    handler,
+  };
 }
 
-export async function commandActivityMap(flags, deps) {
-  const { withClient, readStdinText } = deps;
-  const activityV1Id = requireActivityV1Id(
-    await resolveRequiredFlagValue({
-      command: "activity-map",
+const parsePositiveInteger = (value, context) => requirePositiveIntegerFlag(value, context);
+
+const endpointCommandSpecs = [
+  {
+    name: "cycle-by-id",
+    summary: "Fetch a cycle activity by WHOOP cycle ID.",
+    input: {
+      flagName: "cycle-id",
+      valueLabel: "int",
+      description: "WHOOP cycle identifier.",
+      example: "123456",
+      stdinDescription: "Pipe a cycle ID as plain text.",
+      schema: { type: "integer", min: 1 },
+      parse: parsePositiveInteger,
+    },
+    outputKey: "cycleId",
+    fetchRecord: ({ client, value }) => client.getCycleById(value),
+    localDateFields: true,
+  },
+  {
+    name: "activity-map",
+    summary: "Map legacy v1 activity ID to v2 UUID via WHOOP mapping endpoint.",
+    input: {
       flagName: "activity-v1-id",
-      flags,
-      readStdinText,
-    }),
-  );
-  const client = await withClient(flags);
-  const record = await client.getActivityMapping(activityV1Id);
-  await writeEndpointPayload("activity-map", record, "activityV1Id", activityV1Id, flags, deps);
-}
-
-export async function commandWorkoutById(flags, deps) {
-  const { withClient, readStdinText } = deps;
-  const workoutId = await resolveRequiredFlagValue({
-    command: "workout-by-id",
-    flagName: "workout-id",
-    flags,
-    readStdinText,
-  });
-  const client = await withClient(flags);
-  const record = attachLocalDateFields(await client.getWorkoutById(workoutId), deps);
-  await writeEndpointPayload("workout-by-id", record, "workoutId", workoutId, flags, deps);
-}
-
-export async function commandCycleRecovery(flags, deps) {
-  const { withClient, readStdinText } = deps;
-  const cycleId = requireCycleId(
-    "cycle-recovery",
-    await resolveRequiredFlagValue({
-      command: "cycle-recovery",
+      valueLabel: "int",
+      description: "Legacy WHOOP v1 activity ID.",
+      example: "12345",
+      stdinDescription: "Pipe a legacy v1 activity ID as plain text.",
+      schema: { type: "integer", min: 1 },
+      parse: parsePositiveInteger,
+    },
+    outputKey: "activityV1Id",
+    fetchRecord: ({ client, value }) => client.getActivityMapping(value),
+  },
+  {
+    name: "sleep-by-id",
+    summary: "Fetch a sleep activity by WHOOP sleep UUID.",
+    input: {
+      flagName: "sleep-id",
+      valueLabel: "uuid",
+      description: "WHOOP sleep UUID.",
+      example: "<uuid>",
+      stdinDescription: "Pipe a sleep UUID as plain text.",
+    },
+    outputKey: "sleepId",
+    fetchRecord: ({ client, value }) => client.getSleepById(value),
+    localDateFields: true,
+  },
+  {
+    name: "sleep-stream",
+    summary: "Fetch raw sleep signal stream data by WHOOP sleep UUID.",
+    input: {
+      flagName: "sleep-id",
+      valueLabel: "uuid",
+      description: "WHOOP sleep UUID.",
+      example: "<uuid>",
+      stdinDescription: "Pipe a sleep UUID as plain text.",
+    },
+    outputKey: "sleepId",
+    extraOptions: [
+      option(
+        "--types <csv>",
+        "Stream signals to include: hr, skin_temp, board_temp, battery_temp, sleep_classification, charging_status.",
+      ),
+    ],
+    directUsageArgs: ["[--types hr,skin_temp]"],
+    stdinUsageArgs: ["[--types hr]"],
+    directExampleArgs: ["--types", "hr,skin_temp"],
+    stdinExampleArgs: ["--types", "hr"],
+    fetchRecord: ({ client, value, flags }) => {
+      const types = flags.types ? String(flags.types).trim() : null;
+      return client.getSleepStream(value, { types });
+    },
+  },
+  {
+    name: "workout-by-id",
+    summary: "Fetch a workout activity by WHOOP workout UUID.",
+    input: {
+      flagName: "workout-id",
+      valueLabel: "uuid",
+      description: "WHOOP workout UUID.",
+      example: "<uuid>",
+      stdinDescription: "Pipe a workout UUID as plain text.",
+    },
+    outputKey: "workoutId",
+    fetchRecord: ({ client, value }) => client.getWorkoutById(value),
+    localDateFields: true,
+  },
+  {
+    name: "cycle-recovery",
+    summary: "Fetch recovery record for a specific cycle ID.",
+    input: {
       flagName: "cycle-id",
-      flags,
-      readStdinText,
-    }),
-  );
-  const client = await withClient(flags);
-  const record = attachLocalDateFields(await client.getRecoveryForCycle(cycleId), deps);
-  await writeEndpointPayload("cycle-recovery", record, "cycleId", cycleId, flags, deps);
-}
-
-export async function commandCycleSleep(flags, deps) {
-  const { withClient, readStdinText } = deps;
-  const cycleId = requireCycleId(
-    "cycle-sleep",
-    await resolveRequiredFlagValue({
-      command: "cycle-sleep",
+      valueLabel: "int",
+      description: "WHOOP cycle identifier.",
+      example: "123456",
+      stdinDescription: "Pipe a cycle ID as plain text.",
+      schema: { type: "integer", min: 1 },
+      parse: parsePositiveInteger,
+    },
+    outputKey: "cycleId",
+    fetchRecord: ({ client, value }) => client.getRecoveryForCycle(value),
+    localDateFields: true,
+  },
+  {
+    name: "cycle-sleep",
+    summary: "Fetch sleep record for a specific cycle ID.",
+    input: {
       flagName: "cycle-id",
-      flags,
-      readStdinText,
-    }),
-  );
-  const client = await withClient(flags);
-  const record = attachLocalDateFields(await client.getSleepForCycle(cycleId), deps);
-  await writeEndpointPayload("cycle-sleep", record, "cycleId", cycleId, flags, deps);
-}
+      valueLabel: "int",
+      description: "WHOOP cycle identifier.",
+      example: "123456",
+      stdinDescription: "Pipe a cycle ID as plain text.",
+      schema: { type: "integer", min: 1 },
+      parse: parsePositiveInteger,
+    },
+    outputKey: "cycleId",
+    fetchRecord: ({ client, value }) => client.getSleepForCycle(value),
+    localDateFields: true,
+  },
+];
+
+export const endpointCommandRegistrationList = endpointCommandSpecs.map(
+  (spec) => createEndpointCommandRegistration(spec),
+);
+
+export const endpointCommandRegistrations = Object.fromEntries(
+  endpointCommandRegistrationList.map((registration) => [registration.name, registration]),
+);
+
+export const commandCycleById = endpointCommandRegistrations["cycle-by-id"].handler;
+export const commandActivityMap = endpointCommandRegistrations["activity-map"].handler;
+export const commandSleepById = endpointCommandRegistrations["sleep-by-id"].handler;
+export const commandSleepStream = endpointCommandRegistrations["sleep-stream"].handler;
+export const commandWorkoutById = endpointCommandRegistrations["workout-by-id"].handler;
+export const commandCycleRecovery = endpointCommandRegistrations["cycle-recovery"].handler;
+export const commandCycleSleep = endpointCommandRegistrations["cycle-sleep"].handler;

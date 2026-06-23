@@ -6,6 +6,17 @@ import {
   hasConfirmationBypass,
   resolveRequiredFlagValue,
 } from "../lib/command-input.mjs";
+import {
+  AUTH_CLIENT_OPTIONS,
+  DRY_RUN_OPTION,
+  FORCE_OPTION,
+  JSON_OUTPUT_OPTIONS,
+  STDIN_OPTION,
+  STRUCTURED_OUTPUT_OPTIONS,
+  YES_OPTION,
+  option,
+} from "../lib/command-options.mjs";
+import { CLI_NAME } from "../lib/project-info.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -291,12 +302,13 @@ export async function commandLoginLocal(flags, deps) {
 }
 
 export async function commandExchangeCode(flags, deps) {
-  const { withClient, writeOutput, readStdinText } = deps;
+  const { withClient, writeOutput, readStdinText, commandRegistry } = deps;
   const code = await resolveRequiredFlagValue({
     command: "exchange-code",
     flagName: "code",
     flags,
     readStdinText,
+    commandRegistry,
   });
   const client = await withClient(flags);
 
@@ -320,7 +332,7 @@ export async function commandWhoAmI(flags, deps) {
 }
 
 export async function commandLogout(flags, deps) {
-  const { withClient, writeOutput } = deps;
+  const { withClient, writeOutput, commandRegistry } = deps;
   const client = await withClient(flags);
   const hadSession = Boolean(
     client.session?.tokens || client.session?.pendingAuthorization || client.session?.oauth,
@@ -350,6 +362,7 @@ export async function commandLogout(flags, deps) {
       formatConfirmationRequiredMessage(
         "logout",
         "logout clears the local WHOOP session file.",
+        commandRegistry,
       ),
     );
   }
@@ -369,7 +382,7 @@ export async function commandLogout(flags, deps) {
 }
 
 export async function commandRevoke(flags, deps) {
-  const { withClient, writeOutput } = deps;
+  const { withClient, writeOutput, commandRegistry } = deps;
   const client = await withClient(flags);
   const hadAccessToken = Boolean(client.session?.tokens?.access_token);
   const hadSession = Boolean(
@@ -400,6 +413,7 @@ export async function commandRevoke(flags, deps) {
       formatConfirmationRequiredMessage(
         "revoke",
         "revoke will invalidate WHOOP access and clear local session state.",
+        commandRegistry,
       ),
     );
   }
@@ -437,3 +451,140 @@ export async function commandRevoke(flags, deps) {
     { ...flags, json: true },
   );
 }
+
+export const authCommandRegistrations = {
+  "login-url": {
+    name: "login-url",
+    summary: "Build OAuth authorization URL and persist pending auth metadata.",
+    usage: [
+      `${CLI_NAME} login-url [--scopes read:profile,read:workout,offline] [--state <8chars>] [--open]`,
+    ],
+    options: [
+      ...AUTH_CLIENT_OPTIONS,
+      option("--state <8chars>", "Set a WHOOP-compliant 8-character OAuth state value."),
+      option("--open", "Open the authorization URL in your default browser."),
+      ...JSON_OUTPUT_OPTIONS,
+    ],
+    examples: [
+      `${CLI_NAME} login-url --open`,
+      `${CLI_NAME} login-url --scopes read:profile,read:workout,offline --json`,
+      `${CLI_NAME} login-url --state ABCD1234`,
+    ],
+    handler: commandLoginUrl,
+  },
+  login: {
+    name: "login",
+    summary: "Alias for login-url with setup guidance for code exchange.",
+    usage: [
+      `${CLI_NAME} login [--scopes read:profile,read:workout,offline] [--state <8chars>] [--open]`,
+    ],
+    options: [
+      ...AUTH_CLIENT_OPTIONS,
+      option("--state <8chars>", "Set a WHOOP-compliant 8-character OAuth state value."),
+      option("--open", "Open the authorization URL in your default browser."),
+      ...JSON_OUTPUT_OPTIONS,
+    ],
+    examples: [
+      `${CLI_NAME} login --open`,
+      `${CLI_NAME} login --scopes read:profile,read:body_measurement,offline --json`,
+      `${CLI_NAME} exchange-code --code <authorization_code> --json`,
+    ],
+    handler: commandLogin,
+  },
+  "login-local": {
+    name: "login-local",
+    summary: "Run local callback server, capture code automatically, and exchange tokens.",
+    usage: [
+      `${CLI_NAME} login-local [--scopes read:profile,read:workout,offline] [--state <8chars>] [--timeout-seconds <n>] [--open true|false]`,
+    ],
+    options: [
+      ...AUTH_CLIENT_OPTIONS,
+      option("--state <8chars>", "Set a WHOOP-compliant 8-character OAuth state value."),
+      option(
+        "--timeout-seconds <n>",
+        "Abort if the localhost OAuth callback does not arrive in time.",
+        { type: "integer", min: 1 },
+      ),
+      option(
+        "--open true|false",
+        "Control whether the browser opens automatically (default: true).",
+        { type: "boolean-string" },
+      ),
+      ...JSON_OUTPUT_OPTIONS,
+    ],
+    examples: [
+      `${CLI_NAME} login-local --open`,
+      `${CLI_NAME} login-local --timeout-seconds 300 --json`,
+      `${CLI_NAME} login-local --scopes read:profile,read:sleep,offline`,
+    ],
+    handler: commandLoginLocal,
+  },
+  "exchange-code": {
+    name: "exchange-code",
+    summary: "Exchange OAuth authorization code for access and refresh tokens.",
+    usage: [
+      `${CLI_NAME} exchange-code --code <authorization_code> [--state <8chars>]`,
+      `${CLI_NAME} exchange-code --stdin [--state <8chars>]`,
+    ],
+    options: [
+      ...AUTH_CLIENT_OPTIONS,
+      option("--code <authorization_code>", "Authorization code returned by WHOOP."),
+      option("--state <8chars>", "Optional state override when validating pending auth."),
+      STDIN_OPTION,
+      ...JSON_OUTPUT_OPTIONS,
+    ],
+    examples: [
+      `${CLI_NAME} exchange-code --code <authorization_code> --json`,
+      `printf '%s\\n' "$WHOOP_AUTH_CODE" | ${CLI_NAME} exchange-code --stdin --json`,
+    ],
+    stdin: {
+      description: "Pipe the authorization code as plain text.",
+      examples: [`printf '%s\\n' "$WHOOP_AUTH_CODE" | ${CLI_NAME} exchange-code --stdin --json`],
+    },
+    handler: commandExchangeCode,
+  },
+  "refresh-token": {
+    name: "refresh-token",
+    summary: "Refresh current access token using refresh token and persist session.",
+    usage: [`${CLI_NAME} refresh-token [--json]`],
+    options: [...AUTH_CLIENT_OPTIONS, ...JSON_OUTPUT_OPTIONS],
+    examples: [`${CLI_NAME} refresh-token`, `${CLI_NAME} refresh-token --json`],
+    handler: commandRefreshToken,
+  },
+  whoami: {
+    name: "whoami",
+    summary: "Fetch authenticated WHOOP basic profile from /v2/user/profile/basic.",
+    usage: [`${CLI_NAME} whoami [--json|--csv]`],
+    options: [...AUTH_CLIENT_OPTIONS, ...STRUCTURED_OUTPUT_OPTIONS],
+    examples: [`${CLI_NAME} whoami --json`, `${CLI_NAME} whoami --csv`],
+    handler: commandWhoAmI,
+  },
+  revoke: {
+    name: "revoke",
+    summary: "Revoke OAuth access for current token and clear local session.",
+    usage: [`${CLI_NAME} revoke [--dry-run] [--yes|--force] [--json]`],
+    options: [...AUTH_CLIENT_OPTIONS, DRY_RUN_OPTION, YES_OPTION, FORCE_OPTION, ...JSON_OUTPUT_OPTIONS],
+    examples: [
+      `${CLI_NAME} revoke --dry-run --json`,
+      `${CLI_NAME} revoke --yes --json`,
+    ],
+    handler: commandRevoke,
+  },
+  logout: {
+    name: "logout",
+    summary: "Clear local persisted session.",
+    usage: [`${CLI_NAME} logout [--dry-run] [--yes|--force] [--json]`],
+    options: [
+      option("--session-file <path>", "Override session file path."),
+      DRY_RUN_OPTION,
+      YES_OPTION,
+      FORCE_OPTION,
+      ...JSON_OUTPUT_OPTIONS,
+    ],
+    examples: [
+      `${CLI_NAME} logout --dry-run --json`,
+      `${CLI_NAME} logout --yes --json`,
+    ],
+    handler: commandLogout,
+  },
+};

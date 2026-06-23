@@ -1,81 +1,39 @@
 import {
-  AGENT_FILTER_OPTIONS,
-  AGENT_OUTPUT_OPTIONS,
-  CLI_NAME,
-  COMMANDS,
-  FILTERABLE_COMMANDS,
-} from "../lib/command-manifest.mjs";
+  JSON_OUTPUT_OPTIONS,
+  option,
+} from "../lib/command-options.mjs";
+import { CLI_NAME } from "../lib/project-info.mjs";
 
 const WHOOP_AUTHORIZATION_URL = "https://api.prod.whoop.com/oauth/oauth2/auth";
 const WHOOP_TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token";
 
-export function buildDiscoveryPayload(level = 1, commandFilter = null) {
-  const commandEntries = Object.entries(COMMANDS)
-    .filter(([name]) => !commandFilter || name === commandFilter)
-    .map(([name, def]) => ({
-      name,
-      summary: def.summary,
-      usage: level >= 2 ? def.usage : undefined,
-      supportsAgentFilters: FILTERABLE_COMMANDS.has(name),
-      agentFilters: level >= 3 && FILTERABLE_COMMANDS.has(name) ? AGENT_FILTER_OPTIONS : undefined,
-      agentOutputOptions:
-        level >= 3 && FILTERABLE_COMMANDS.has(name) ? AGENT_OUTPUT_OPTIONS : undefined,
-    }));
-
-  const payload = {
-    generatedAt: new Date().toISOString(),
-    progressiveDisclosureLevel: level,
-    discoveryFlow: {
-      level1: "Choose auth command and required scopes.",
-      level2: "Run data commands with --json for machine output.",
-      level3:
-        "Apply --from/--to/--type/--contains/--min-strain/--max-strain/--min-recovery/--max-recovery/--sort/--result-limit/--fields.",
-    },
-    firstSteps: [
-      `${CLI_NAME} capabilities --json`,
-      `${CLI_NAME} login-local --open --json`,
-      `${CLI_NAME} login --json`,
-      `${CLI_NAME} whoami --json`,
-      `${CLI_NAME} workouts --days 14 --json`,
-      `${CLI_NAME} help workouts --json`,
-    ],
-    commandCount: commandEntries.length,
-    commands: commandEntries,
-  };
-
-  if (level >= 3) {
-    payload.agentPatterns = [
-      {
-        pattern: "Find highest-strain workouts over last 30 days",
-        command:
-          `${CLI_NAME} workouts --days 30 --min-strain 12 --sort strain-desc --result-limit 20 --fields id,start,sport_name,score.strain --json`,
-      },
-      {
-        pattern: "Inspect poor recovery days",
-        command:
-          `${CLI_NAME} recoveries --days 60 --max-recovery 40 --sort recovery --fields cycle_id,created_at,score.recovery_score,score.resting_heart_rate --jsonl`,
-      },
-      {
-        pattern: "Summarize sleep window",
-        command:
-          `${CLI_NAME} sleep --from 2026-02-01 --to 2026-02-24 --fields id,start,end,score.sleep_performance_percentage,score.stage_summary.total_in_bed_time_milli --json`,
-      },
-    ];
+function requireCommandRegistry(commandRegistry) {
+  if (!commandRegistry) {
+    throw new Error("Command registry is required for discovery commands.");
   }
+  return commandRegistry;
+}
 
-  return payload;
+export function buildDiscoveryPayload(level = 1, commandFilter = null, commandRegistry = null) {
+  return requireCommandRegistry(commandRegistry).buildDiscoveryPayload(level, commandFilter);
 }
 
 export async function commandDiscover(flags, deps) {
-  const { requirePositiveInteger, isJsonMode, writeOutput } = deps;
+  const {
+    commandRegistry,
+    requirePositiveInteger,
+    isJsonMode,
+    writeOutput,
+  } = deps;
+  const registry = requireCommandRegistry(commandRegistry);
   const level = requirePositiveInteger(flags.level, 1);
   const boundedLevel = Math.min(Math.max(level, 1), 3);
   const commandFilter = flags.command ? String(flags.command).trim() : null;
-  if (commandFilter && !COMMANDS[commandFilter]) {
+  if (commandFilter && !registry.has(commandFilter)) {
     throw new Error(`Unknown command for --command: ${commandFilter}`);
   }
 
-  const payload = buildDiscoveryPayload(boundedLevel, commandFilter);
+  const payload = buildDiscoveryPayload(boundedLevel, commandFilter, registry);
   if (!isJsonMode(flags)) {
     await writeOutput(payload, flags, (value) => {
       const lines = [
@@ -99,7 +57,8 @@ export async function commandDiscover(flags, deps) {
 }
 
 export async function commandCapabilities(flags, deps) {
-  const { writeOutput } = deps;
+  const { commandRegistry, writeOutput } = deps;
+  const registry = requireCommandRegistry(commandRegistry);
   const payload = {
     generatedAt: new Date().toISOString(),
     authMode: {
@@ -133,6 +92,7 @@ export async function commandCapabilities(flags, deps) {
         "GET /v2/cycle/{cycleId}/recovery",
         "GET /v2/cycle/{cycleId}/sleep",
         "GET /v2/activity/sleep/{sleepId}",
+        "GET /v2/activity/sleep/{sleepId}/stream",
         "GET /v2/activity/workout/{workoutId}",
       ],
       accountControl: ["DELETE /v2/user/access"],
@@ -147,7 +107,7 @@ export async function commandCapabilities(flags, deps) {
       headers: ["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
       limitResponse: "429 Too Many Requests",
     },
-    commands: Object.keys(COMMANDS),
+    commands: registry.names(),
     agentFeatures: {
       progressiveDisclosure: [
         "discover --level 1",
@@ -155,11 +115,11 @@ export async function commandCapabilities(flags, deps) {
         "discover --level 3 --json",
         "help <command> --json",
       ],
-      filterableCommands: Array.from(FILTERABLE_COMMANDS),
-      filterOptions: AGENT_FILTER_OPTIONS,
-      outputOptions: AGENT_OUTPUT_OPTIONS,
+      filterableCommands: Array.from(registry.filterableCommands),
+      filterOptions: registry.agentFilterOptions,
+      outputOptions: registry.agentOutputOptions,
     },
-    outputModes: ["text", "json", "jsonl"],
+    outputModes: registry.outputModes,
     timezone: {
       flag: "--tz <IANA timezone>",
       environment: "WHOOP_TIMEZONE",
@@ -172,9 +132,44 @@ export async function commandCapabilities(flags, deps) {
       "Capabilities:",
       "- OAuth2 authorization-code auth with refresh token support.",
       "- login-local provides automatic code capture with localhost redirect URIs.",
-      "- WHOOP v2 endpoints for profile, body, cycles, recoveries, sleep, and workouts.",
+      "- WHOOP v2 endpoints for profile, body, cycles, recoveries, sleep, sleep streams, and workouts.",
       "- Pagination via next_token and query nextToken (max page size 25).",
       "- Agent-oriented filtering/projection with --fields and --records-only.",
     ].join("\n");
   });
 }
+
+export const discoveryCommandRegistrations = {
+  discover: {
+    name: "discover",
+    summary: "Agent-oriented command discovery with progressive disclosure levels.",
+    usage: [
+      `${CLI_NAME} discover`,
+      `${CLI_NAME} discover --level 1|2|3 [--json]`,
+      `${CLI_NAME} discover --command workouts --level 3 --json`,
+    ],
+    options: [
+      option(
+        "--level <n>",
+        "Discovery depth: 1 (command list), 2 (usage), 3 (filters + patterns).",
+        { type: "integer", min: 1 },
+      ),
+      option("--command <name>", "Limit the payload to one command."),
+      ...JSON_OUTPUT_OPTIONS,
+    ],
+    examples: [
+      `${CLI_NAME} discover --level 1`,
+      `${CLI_NAME} discover --level 3 --json`,
+      `${CLI_NAME} discover --command workouts --level 3 --json`,
+    ],
+    handler: commandDiscover,
+  },
+  capabilities: {
+    name: "capabilities",
+    summary: "Show auth, scope, endpoint, and rate-limit capabilities.",
+    usage: [`${CLI_NAME} capabilities [--json]`],
+    options: [...JSON_OUTPUT_OPTIONS],
+    examples: [`${CLI_NAME} capabilities`, `${CLI_NAME} capabilities --json`],
+    handler: commandCapabilities,
+  },
+};

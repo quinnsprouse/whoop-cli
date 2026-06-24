@@ -1,7 +1,5 @@
 #!/usr/bin/env node
 
-import os from "node:os";
-import path from "node:path";
 import process from "node:process";
 import { WhoopClient } from "./whoop-client.mjs";
 import {
@@ -10,16 +8,13 @@ import {
 } from "./lib/agent-filters.mjs";
 import {
   createAgentOutput,
-  toRecordsOnlyPayload,
 } from "./lib/agent-output.mjs";
 import {
   CLI_NAME,
 } from "./lib/project-info.mjs";
+import { DEFAULT_SESSION_FILE } from "./lib/local-session.mjs";
 import {
-  formatDateTimeInTimeZone,
   normalizeTimeZone,
-  parseApiDateTime,
-  toDateOnlyInTimeZone,
 } from "./lib/timezone.mjs";
 import { commandRegistry } from "./commands/registry.mjs";
 
@@ -64,7 +59,7 @@ async function withClient(flags) {
   const sessionFile =
     flags["session-file"] ??
     process.env.WHOOP_SESSION_FILE ??
-    path.resolve(os.homedir(), ".whoop", "session.json");
+    DEFAULT_SESSION_FILE;
 
   const client = new WhoopClient({
     clientId: flags["client-id"] ?? process.env.WHOOP_CLIENT_ID ?? null,
@@ -76,22 +71,6 @@ async function withClient(flags) {
 
   await client.loadSession();
   return client;
-}
-
-function sortByDateAsc(records) {
-  return [...(Array.isArray(records) ? records : [])].sort((a, b) => {
-    const left = String(a?.localDate ?? a?.dateOnly ?? a?.start ?? a?.created_at ?? "");
-    const right = String(b?.localDate ?? b?.dateOnly ?? b?.start ?? b?.created_at ?? "");
-    return left.localeCompare(right);
-  });
-}
-
-function sortByDateDesc(records) {
-  return [...(Array.isArray(records) ? records : [])].sort((a, b) => {
-    const left = String(a?.localDate ?? a?.dateOnly ?? a?.start ?? a?.created_at ?? "");
-    const right = String(b?.localDate ?? b?.dateOnly ?? b?.start ?? b?.created_at ?? "");
-    return right.localeCompare(left);
-  });
 }
 
 async function main() {
@@ -162,16 +141,10 @@ async function main() {
     commandRegistry,
     timeZone: ACTIVE_TIME_ZONE,
     applyAgentRecordFilters,
-    toRecordsOnlyPayload,
     hasAgentRecordTransforms,
     readStdinText,
     requirePositiveInteger,
     withClient,
-    sortByDateAsc,
-    sortByDateDesc,
-    parseApiDateTime,
-    toDateOnlyInTimeZone,
-    formatDateTimeInTimeZone,
   };
   commandDeps.isJsonMode = commandDeps.agentOutput.isJsonMode;
   commandDeps.writeOutput = commandDeps.agentOutput.writeOutput;

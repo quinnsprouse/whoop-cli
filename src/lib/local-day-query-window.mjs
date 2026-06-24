@@ -5,10 +5,11 @@ import {
   toUtcDateTimeForEndExclusive,
   toUtcDateTimeForStartOfDay,
 } from "./timezone.mjs";
+import { resolveRecordDateOnly } from "./record-shape.mjs";
 
 const DATE_TIME_WITH_OFFSET_PATTERN = /(Z|[+\-]\d{2}:\d{2})$/i;
 
-function normalizeDateOnlyInput(value, fallback, label = "date") {
+export function normalizeLocalDateOnlyInput(value, fallback, label = "date") {
   if (value == null || value === "") return fallback;
   const normalized = String(value).trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
@@ -73,8 +74,8 @@ export function buildLocalDayQueryWindow({
 
   const days = requirePositiveInteger(flags.days, defaultDays, "days");
   const today = resolveToday(normalizedTimeZone, now);
-  const fromDate = normalizeDateOnlyInput(flags.from, shiftDateOnly(today, -days), "--from");
-  const toDate = normalizeDateOnlyInput(flags.to, today, "--to");
+  const fromDate = normalizeLocalDateOnlyInput(flags.from, shiftDateOnly(today, -days), "--from");
+  const toDate = normalizeLocalDateOnlyInput(flags.to, today, "--to");
   if (toDate < fromDate) {
     throw new Error(`Invalid range: --to (${toDate}) is before --from (${fromDate}).`);
   }
@@ -90,6 +91,26 @@ export function buildLocalDayQueryWindow({
   };
 }
 
+export function buildLocalDateFilterWindow({
+  flags = {},
+  timeZone = null,
+} = {}) {
+  const normalizedTimeZone = normalizeTimeZone(timeZone);
+  const fromDate = normalizeLocalDateOnlyInput(flags.from ?? flags.fromDate, null, "--from");
+  const toDate = normalizeLocalDateOnlyInput(flags.to ?? flags.toDate, null, "--to");
+
+  if (fromDate && toDate && toDate < fromDate) {
+    throw new Error(`Invalid range: --to (${toDate}) is before --from (${fromDate}).`);
+  }
+
+  return {
+    fromDate,
+    toDate,
+    source: "local-date-filter",
+    timeZone: normalizedTimeZone,
+  };
+}
+
 export function buildSingleLocalDayQueryWindow({
   date = null,
   timeZone = null,
@@ -97,7 +118,7 @@ export function buildSingleLocalDayQueryWindow({
 } = {}) {
   const normalizedTimeZone = normalizeTimeZone(timeZone);
   const today = resolveToday(normalizedTimeZone, now);
-  const dateOnly = normalizeDateOnlyInput(date, today, "--date");
+  const dateOnly = normalizeLocalDateOnlyInput(date, today, "--date");
 
   return {
     date: dateOnly,
@@ -106,4 +127,50 @@ export function buildSingleLocalDayQueryWindow({
     source: "single-local-day",
     timeZone: normalizedTimeZone,
   };
+}
+
+export function getLocalDayRecordFilterBounds(queryWindow) {
+  if (!queryWindow || typeof queryWindow !== "object") {
+    return { fromDate: null, toDate: null, timeZone: null };
+  }
+
+  if (queryWindow.source === "local-date-window" || queryWindow.source === "local-date-filter") {
+    return {
+      fromDate: queryWindow.fromDate ?? null,
+      toDate: queryWindow.toDate ?? null,
+      timeZone: queryWindow.timeZone ?? null,
+    };
+  }
+
+  if (queryWindow.source === "single-local-day") {
+    return {
+      fromDate: queryWindow.date ?? null,
+      toDate: queryWindow.date ?? null,
+      timeZone: queryWindow.timeZone ?? null,
+    };
+  }
+
+  return { fromDate: null, toDate: null, timeZone: queryWindow.timeZone ?? null };
+}
+
+export function localDateIsInsideQueryWindow(dateOnly, queryWindow) {
+  const { fromDate, toDate } = getLocalDayRecordFilterBounds(queryWindow);
+  if (!fromDate && !toDate) return true;
+  if (!dateOnly) return false;
+  if (fromDate && dateOnly < fromDate) return false;
+  if (toDate && dateOnly > toDate) return false;
+  return true;
+}
+
+export function filterRecordsToLocalDayQueryWindow(records, queryWindow, {
+  resolveDateOnly = resolveRecordDateOnly,
+} = {}) {
+  const input = Array.isArray(records) ? records : [];
+  const { fromDate, toDate, timeZone } = getLocalDayRecordFilterBounds(queryWindow);
+  if (!fromDate && !toDate) return [...input];
+
+  return input.filter((record) => {
+    const dateOnly = resolveDateOnly(record, timeZone);
+    return localDateIsInsideQueryWindow(dateOnly, queryWindow);
+  });
 }

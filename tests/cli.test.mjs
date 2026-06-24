@@ -5,6 +5,12 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import {
+  buildEndpointCoverage,
+  getWhoopScopeDescriptions,
+} from "../src/lib/whoop-endpoint-catalog.mjs";
+import { LocalSession } from "../src/lib/local-session.mjs";
+import { runLocalOAuthLogin } from "../src/lib/local-oauth-flow.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliPath = path.join(repoRoot, "src", "cli.mjs");
@@ -58,6 +64,27 @@ async function withTempDir(run) {
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
+}
+
+async function getFreePort() {
+  const server = createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  return port;
+}
+
+async function fetchWithRetry(url, { attempts = 20, delayMs = 25 } = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetch(url);
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
 }
 
 async function startMockWhoopServer() {
@@ -221,32 +248,22 @@ async function startMockWhoopServer() {
 }
 
 async function writeSession(sessionFile) {
-  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-  await fs.writeFile(
-    sessionFile,
-    `${JSON.stringify(
-      {
-        tokens: {
-          access_token: "valid-token",
-          refresh_token: "refresh-token",
-          token_type: "bearer",
-          scope: "read:profile offline",
-          expires_in: 3600,
-          obtained_at: new Date().toISOString(),
-          expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-        },
-        pendingAuthorization: null,
-        oauth: {
-          clientId: "client-id",
-          redirectUri: "http://localhost:8787/callback",
-          scope: "read:profile offline",
-        },
-        updatedAt: new Date().toISOString(),
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
+  const session = new LocalSession({ sessionFile });
+  await session.saveTokens(
+    {
+      access_token: "valid-token",
+      refresh_token: "refresh-token",
+      token_type: "bearer",
+      scope: "read:profile offline",
+      expires_in: 3600,
+      obtained_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    },
+    {
+      clientId: "client-id",
+      redirectUri: "http://localhost:8787/callback",
+      scope: "read:profile offline",
+    },
   );
 }
 
@@ -301,6 +318,21 @@ test("equals-sign flags parse correctly", () => {
   assert.equal(result.status, 0, result.stderr);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.progressiveDisclosureLevel, 2);
+});
+
+test("cli command deps omit retired date and output adapters", async () => {
+  const source = await fs.readFile(cliPath, "utf8");
+
+  for (const adapter of [
+    "sortByDateAsc",
+    "sortByDateDesc",
+    "parseApiDateTime",
+    "toDateOnlyInTimeZone",
+    "formatDateTimeInTimeZone",
+    "toRecordsOnlyPayload",
+  ]) {
+    assert.doesNotMatch(source, new RegExp(`\\b${adapter}\\b`));
+  }
 });
 
 test("schema-aware argv parsing keeps boolean flags from swallowing positionals", () => {
@@ -384,6 +416,16 @@ test("json command help exposes normalized option schema", () => {
   assert.ok(payload.options.some((option) => option.name === "days" && option.type === "integer"));
   assert.ok(payload.agentOutputOptions.some((option) => option.name === "records-only"));
   assert.ok(payload.outputModes.includes("csv"));
+  assert.deepEqual(payload.endpoints, [
+    {
+      key: "workout.collection",
+      method: "GET",
+      path: "/v2/activity/workout",
+      scope: "read:workout",
+      coverageGroup: "collections",
+      description: "List workout records in a date window.",
+    },
+  ]);
 });
 
 test("discover command filter returns level 3 agent schema", () => {
@@ -392,6 +434,16 @@ test("discover command filter returns level 3 agent schema", () => {
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.commandCount, 1);
   assert.equal(payload.commands[0].name, "workouts");
+  assert.deepEqual(payload.commands[0].endpoints, [
+    {
+      key: "workout.collection",
+      method: "GET",
+      path: "/v2/activity/workout",
+      scope: "read:workout",
+      coverageGroup: "collections",
+      description: "List workout records in a date window.",
+    },
+  ]);
   assert.ok(payload.commands[0].agentFilters.some((option) => option.name === "min-strain"));
   assert.ok(payload.commands[0].agentOutputOptions.some((option) => option.name === "records-only"));
 });
@@ -403,6 +455,8 @@ test("capabilities derives agent-facing output modes from command registration",
   assert.ok(payload.commands.includes("sleep-stream"));
   assert.deepEqual(payload.outputModes, ["text", "json", "jsonl", "csv"]);
   assert.ok(payload.agentFeatures.filterableCommands.includes("workouts"));
+  assert.deepEqual(payload.scopes, getWhoopScopeDescriptions());
+  assert.deepEqual(payload.endpointCoverage, buildEndpointCoverage());
 });
 
 test("unknown commands and flags return registry suggestions", () => {
@@ -676,6 +730,56 @@ test("exchange-code accepts stdin and persists the returned token", async () => 
       await server.close();
     }
   });
+});
+
+test("local OAuth flow captures callback and exchanges the authorization code", async () => {
+  const port = await getFreePort();
+  const redirectUri = `http://127.0.0.1:${port}/callback`;
+  let savedAuth = null;
+  let exchangeArgs = null;
+
+  const client = {
+    buildAuthorizationRequest({ scopes, state }) {
+      const scopeText = scopes.join(" ");
+      return {
+        authorizationUrl: "https://api.prod.whoop.com/oauth/oauth2/auth?state=ABCD1234",
+        clientId: "client-id",
+        redirectUri,
+        state,
+        scopes,
+        scopeText,
+        createdAt: new Date().toISOString(),
+      };
+    },
+    savePendingAuthorization: async (auth) => {
+      savedAuth = auth;
+    },
+    exchangeCodeForToken: async (args) => {
+      exchangeArgs = args;
+      return {
+        ok: true,
+        expiresAt: "2026-06-24T17:00:00.000Z",
+      };
+    },
+  };
+
+  const flow = runLocalOAuthLogin({
+    client,
+    scopes: ["read:profile", "offline"],
+    state: "ABCD1234",
+    timeoutSeconds: 5,
+    open: false,
+  });
+
+  const response = await fetchWithRetry(`${redirectUri}?code=local-code&state=ABCD1234`);
+  assert.equal(response.status, 200);
+
+  const result = await flow;
+  assert.equal(result.auth, savedAuth);
+  assert.equal(result.callback.code, "local-code");
+  assert.deepEqual(exchangeArgs, { code: "local-code", state: "ABCD1234" });
+  assert.deepEqual(result.openResult, { opened: false });
+  assert.equal(result.token.ok, true);
 });
 
 for (const scenario of [

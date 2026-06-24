@@ -1,20 +1,22 @@
 import { AGENT_FILTER_OPTIONS } from "./command-options.mjs";
 import {
-  projectRecordFields,
+  buildLocalDateFilterWindow,
+  filterRecordsToLocalDayQueryWindow,
+  getLocalDayRecordFilterBounds,
+} from "./local-day-query-window.mjs";
+import {
   splitCsv,
 } from "./agent-output.mjs";
-import { normalizeTimeZone, toDateOnlyInTimeZone } from "./timezone.mjs";
+import {
+  resolveRecordDateOnly,
+  resolveRecordRecovery,
+  resolveRecordStrain,
+  resolveRecordText,
+  resolveRecordType,
+} from "./record-shape.mjs";
+import { normalizeTimeZone } from "./timezone.mjs";
 
 const AGENT_FILTER_OPTION_NAMES = AGENT_FILTER_OPTIONS.map((option) => option.name);
-
-function normalizeDateOnlyInput(value, fallback) {
-  if (value == null || value === "") return fallback;
-  const normalized = String(value).trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
-    throw new Error(`Invalid date "${value}". Expected YYYY-MM-DD.`);
-  }
-  return normalized;
-}
 
 function requireNumber(value, fallback) {
   if (value == null) return fallback;
@@ -34,77 +36,6 @@ function toLowerOrNull(value) {
   return String(value).toLowerCase();
 }
 
-function resolveRecordDateOnly(record, timeZone) {
-  if (!record || typeof record !== "object") return null;
-
-  if (typeof record.dateOnly === "string") return record.dateOnly;
-  if (typeof record.localDate === "string") return record.localDate;
-
-  const candidates = [record.start, record.created_at, record.updated_at, record.end, record.date];
-  for (const candidate of candidates) {
-    const normalized = toDateOnlyInTimeZone(candidate, timeZone, {
-      assumeUtcForOffsetlessDateTime: true,
-    });
-    if (normalized) return normalized;
-  }
-
-  return null;
-}
-
-function resolveRecordType(record) {
-  if (!record || typeof record !== "object") return null;
-  if (record.recordType != null) return record.recordType;
-  if (record.type != null) return record.type;
-  if (record.sport_name != null) return record.sport_name;
-  if (record.score_state != null) return record.score_state;
-  if (record.nap === true) return "nap";
-  if (record.nap === false) return "sleep";
-  return null;
-}
-
-function resolveRecordStrain(record) {
-  if (!record || typeof record !== "object") return null;
-  const candidates = [
-    record.strain,
-    record.score?.strain,
-    record.cycle_score?.strain,
-    record.workout_score?.strain,
-  ];
-  for (const candidate of candidates) {
-    const numeric = Number(candidate);
-    if (Number.isFinite(numeric)) return numeric;
-  }
-  return null;
-}
-
-function resolveRecordRecovery(record) {
-  if (!record || typeof record !== "object") return null;
-  const candidates = [record.recovery_score, record.score?.recovery_score];
-  for (const candidate of candidates) {
-    const numeric = Number(candidate);
-    if (Number.isFinite(numeric)) return numeric;
-  }
-  return null;
-}
-
-function resolveRecordText(record) {
-  if (!record || typeof record !== "object") return "";
-  const textParts = [
-    record.id,
-    record.user_id,
-    record.cycle_id,
-    record.sleep_id,
-    record.sport_name,
-    record.score_state,
-    record.recordType,
-    record.type,
-    record.nap === true ? "nap" : record.nap === false ? "sleep" : null,
-  ]
-    .filter((value) => value != null)
-    .map((value) => String(value));
-  return textParts.join(" ").toLowerCase();
-}
-
 function compareNullableNumbers(a, b) {
   const left = Number.isFinite(a) ? a : null;
   const right = Number.isFinite(b) ? b : null;
@@ -114,9 +45,21 @@ function compareNullableNumbers(a, b) {
   return left - right;
 }
 
-function parseAgentFilterConfig(flags, timeZone) {
-  const fromDate = flags.from ? normalizeDateOnlyInput(flags.from, null) : null;
-  const toDate = flags.to ? normalizeDateOnlyInput(flags.to, null) : null;
+function resolveDateWindow(flags, timeZone, queryWindow) {
+  if (
+    queryWindow?.source === "local-date-window" ||
+    queryWindow?.source === "local-date-filter" ||
+    queryWindow?.source === "single-local-day"
+  ) {
+    return queryWindow;
+  }
+
+  return buildLocalDateFilterWindow({ flags, timeZone });
+}
+
+function parseAgentFilterConfig(flags, timeZone, { queryWindow = null } = {}) {
+  const dateWindow = resolveDateWindow(flags, timeZone, queryWindow);
+  const dateFilter = getLocalDayRecordFilterBounds(dateWindow);
   const minStrain =
     flags["min-strain"] != null && flags["min-strain"] !== true
       ? Number(flags["min-strain"])
@@ -141,8 +84,9 @@ function parseAgentFilterConfig(flags, timeZone) {
 
   return {
     timeZone,
-    fromDate,
-    toDate,
+    dateWindow,
+    fromDate: dateFilter.fromDate,
+    toDate: dateFilter.toDate,
     minStrain: Number.isFinite(minStrain) ? minStrain : null,
     maxStrain: Number.isFinite(maxStrain) ? maxStrain : null,
     minRecovery: Number.isFinite(minRecovery) ? minRecovery : null,
@@ -155,20 +99,14 @@ function parseAgentFilterConfig(flags, timeZone) {
   };
 }
 
-export function applyAgentRecordFilters(records, flags, timeZone = null) {
+export function applyAgentRecordFilters(records, flags, timeZone = null, options = {}) {
   const resolvedTimeZone = normalizeTimeZone(timeZone);
-  const config = parseAgentFilterConfig(flags, resolvedTimeZone);
+  const config = parseAgentFilterConfig(flags, resolvedTimeZone, options);
   const input = Array.isArray(records) ? records : [];
   let output = [...input];
 
   if (config.fromDate || config.toDate) {
-    output = output.filter((record) => {
-      const dateOnly = resolveRecordDateOnly(record, resolvedTimeZone);
-      if (!dateOnly) return false;
-      if (config.fromDate && dateOnly < config.fromDate) return false;
-      if (config.toDate && dateOnly > config.toDate) return false;
-      return true;
-    });
+    output = filterRecordsToLocalDayQueryWindow(output, config.dateWindow);
   }
 
   if (config.typeFilters.length > 0) {
@@ -247,10 +185,6 @@ export function applyAgentRecordFilters(records, flags, timeZone = null) {
 
   if (config.resultLimit != null) {
     output = output.slice(0, config.resultLimit);
-  }
-
-  if (config.fields.length > 0) {
-    output = output.map((record) => projectRecordFields(record, config.fields));
   }
 
   const filterSummary = {

@@ -9,8 +9,12 @@ import {
   GLOBAL_NOTES,
   PROJECT_NOTICE,
 } from "../lib/project-info.mjs";
+import { getWhoopEndpointsForCommand } from "../lib/whoop-endpoint-catalog.mjs";
 import { authCommandRegistrations } from "./auth.mjs";
-import { collectionCommandRegistrations } from "./collections.mjs";
+import {
+  collectionCommandRegistrationList,
+  collectionCommandRegistrations,
+} from "./collections.mjs";
 import { discoveryCommandRegistrations } from "./discovery.mjs";
 import { endpointCommandRegistrationList } from "./endpoints.mjs";
 import { helpCommandRegistration } from "./help.mjs";
@@ -21,7 +25,19 @@ function commandMetadataOnly(registration) {
   return metadata;
 }
 
-export const COMMAND_REGISTRATIONS = [
+function withEndpointCatalogMetadata(registration) {
+  if (registration.endpoint || registration.endpoints) return registration;
+
+  const endpoints = getWhoopEndpointsForCommand(registration.name);
+  if (endpoints.length === 0) return registration;
+
+  return {
+    ...registration,
+    endpoints,
+  };
+}
+
+const RAW_COMMAND_REGISTRATIONS = [
   helpCommandRegistration,
   discoveryCommandRegistrations.discover,
   discoveryCommandRegistrations.capabilities,
@@ -33,15 +49,14 @@ export const COMMAND_REGISTRATIONS = [
   authCommandRegistrations.whoami,
   userCommandRegistrations.profile,
   userCommandRegistrations.body,
-  collectionCommandRegistrations.cycles,
-  collectionCommandRegistrations.recoveries,
-  collectionCommandRegistrations.sleep,
-  collectionCommandRegistrations.workouts,
+  ...collectionCommandRegistrationList,
   ...endpointCommandRegistrationList,
   collectionCommandRegistrations.day,
   authCommandRegistrations.revoke,
   authCommandRegistrations.logout,
 ];
+
+export const COMMAND_REGISTRATIONS = RAW_COMMAND_REGISTRATIONS.map(withEndpointCatalogMetadata);
 
 export const COMMANDS = Object.fromEntries(
   COMMAND_REGISTRATIONS.map((registration) => [

@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { AuthenticatedRequest } from "../src/lib/authenticated-request.mjs";
+import { LocalSession } from "../src/lib/local-session.mjs";
 import { WhoopClient } from "../src/whoop-client.mjs";
 
 const TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token";
@@ -42,18 +44,12 @@ function buildToken({
 }
 
 async function writeSession(sessionFile, token) {
-  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-  const payload = {
-    tokens: token,
-    pendingAuthorization: null,
-    oauth: {
-      clientId: "client-id",
-      redirectUri: "http://localhost:8787/callback",
-      scope: token.scope,
-    },
-    updatedAt: new Date().toISOString(),
-  };
-  await fs.writeFile(sessionFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  const session = new LocalSession({ sessionFile });
+  await session.saveTokens(token, {
+    clientId: "client-id",
+    redirectUri: "http://localhost:8787/callback",
+    scope: token.scope,
+  });
 }
 
 function expiredIso() {
@@ -80,6 +76,106 @@ function makeClient(sessionFile, fetchImpl, sleepImpl = async () => {}) {
     refreshLockStaleMs: 2000,
   });
 }
+
+test("local session refresh lock acquires and releases the lock file", async () => {
+  await withTempDir(async (tmpDir) => {
+    const sessionFile = path.join(tmpDir, "session.json");
+    const session = new LocalSession({ sessionFile });
+
+    const releaseLock = await session.acquireRefreshLock();
+    const lockPayload = JSON.parse(await fs.readFile(session.refreshLockFile, "utf8"));
+
+    assert.equal(lockPayload.pid, process.pid);
+    assert.match(lockPayload.createdAt, /^\d{4}-\d{2}-\d{2}T/);
+
+    await releaseLock();
+    await releaseLock();
+    await assert.rejects(() => fs.stat(session.refreshLockFile), { code: "ENOENT" });
+  });
+});
+
+test("local session refresh lock waits for active lock and clears stale lock", async () => {
+  await withTempDir(async (tmpDir) => {
+    const sessionFile = path.join(tmpDir, "session.json");
+    const holder = new LocalSession({ sessionFile });
+    const releaseHolder = await holder.acquireRefreshLock();
+    const sleepDurations = [];
+    let holderReleased = false;
+
+    const waiter = new LocalSession({
+      sessionFile,
+      refreshLockPollMs: 5,
+      refreshLockTimeoutMs: 500,
+      refreshLockStaleMs: 60000,
+      sleepImpl: async (ms) => {
+        sleepDurations.push(ms);
+        if (!holderReleased) {
+          holderReleased = true;
+          await releaseHolder();
+        }
+      },
+    });
+
+    const releaseWaiter = await waiter.acquireRefreshLock();
+    assert.deepEqual(sleepDurations, [5]);
+    await releaseWaiter();
+
+    await fs.writeFile(waiter.refreshLockFile, "stale", "utf8");
+    const staleDate = new Date(Date.now() - 60 * 1000);
+    await fs.utimes(waiter.refreshLockFile, staleDate, staleDate);
+
+    const staleCleaner = new LocalSession({
+      sessionFile,
+      refreshLockPollMs: 5,
+      refreshLockTimeoutMs: 500,
+      refreshLockStaleMs: 1,
+      sleepImpl: async () => {},
+    });
+    const releaseStaleCleaner = await staleCleaner.acquireRefreshLock();
+    const lockPayload = JSON.parse(await fs.readFile(staleCleaner.refreshLockFile, "utf8"));
+
+    assert.equal(lockPayload.pid, process.pid);
+    await releaseStaleCleaner();
+  });
+});
+
+test("authenticated request module refreshes expired token before request", async () => {
+  let currentToken = buildToken({
+    accessToken: "expired-token",
+    refreshToken: "refresh-token",
+    expiresAt: expiredIso(),
+  });
+  let refreshOptions = null;
+  let attempts = 0;
+
+  const requester = new AuthenticatedRequest({
+    developerBaseUrl: "https://api.prod.whoop.com/developer",
+    userAgent: "test-agent",
+    fetchImpl: async (url, options) => {
+      attempts += 1;
+      assert.equal(String(url), PROFILE_URL);
+      assert.equal(options.headers.get("authorization"), "Bearer fresh-token");
+      return jsonResponse({ user_id: 999 });
+    },
+    tokenStore: {
+      currentToken: () => currentToken,
+      refreshAccessToken: async (options) => {
+        refreshOptions = options;
+        currentToken = buildToken({
+          accessToken: "fresh-token",
+          refreshToken: "refresh-token",
+          expiresAt: futureIso(),
+        });
+      },
+    },
+  });
+
+  const response = await requester.request("/v2/user/profile/basic");
+
+  assert.deepEqual(response.data, { user_id: 999 });
+  assert.deepEqual(refreshOptions, { force: false, useLock: true });
+  assert.equal(attempts, 1);
+});
 
 test("refresh lock prevents duplicate token refresh across clients", async () => {
   await withTempDir(async (tmpDir) => {

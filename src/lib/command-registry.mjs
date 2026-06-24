@@ -176,6 +176,13 @@ function formatExpectation(option) {
   }
 }
 
+function endpointsForCommand(command) {
+  const endpoints = [];
+  if (command?.endpoint) endpoints.push(command.endpoint);
+  if (Array.isArray(command?.endpoints)) endpoints.push(...command.endpoints);
+  return endpoints;
+}
+
 function parseBooleanValue(value) {
   if (typeof value === "boolean") return value;
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -463,6 +470,7 @@ export function createCommandRegistry({
   function buildCommandHelpPayload(name) {
     const command = get(name);
     if (!command) return null;
+    const endpoints = endpointsForCommand(command);
     return {
       command: name,
       summary: command.summary,
@@ -470,6 +478,7 @@ export function createCommandRegistry({
       options: command.options ?? [],
       examples: command.examples ?? [],
       stdin: command.stdin ?? null,
+      endpoints: endpoints.length > 0 ? endpoints : undefined,
       timezoneOption: "--tz <IANA timezone> (defaults to WHOOP_TIMEZONE or system timezone)",
       supportsAgentFilters: supportsAgentFilters(name),
       agentFilterOptions: supportsAgentFilters(name) ? normalizedAgentFilterOptions : [],
@@ -568,16 +577,20 @@ export function createCommandRegistry({
   function buildDiscoveryPayload(level = 1, commandFilter = null) {
     const commandEntries = commandList
       .filter((command) => !commandFilter || command.name === commandFilter)
-      .map((command) => ({
-        name: command.name,
-        summary: command.summary,
-        usage: level >= 2 ? command.usage : undefined,
-        supportsAgentFilters: supportsAgentFilters(command.name),
-        agentFilters:
-          level >= 3 && supportsAgentFilters(command.name) ? normalizedAgentFilterOptions : undefined,
-        agentOutputOptions:
-          level >= 3 && supportsAgentFilters(command.name) ? normalizedAgentOutputOptions : undefined,
-      }));
+      .map((command) => {
+        const endpoints = endpointsForCommand(command);
+        return {
+          name: command.name,
+          summary: command.summary,
+          usage: level >= 2 ? command.usage : undefined,
+          endpoints: level >= 2 && endpoints.length > 0 ? endpoints : undefined,
+          supportsAgentFilters: supportsAgentFilters(command.name),
+          agentFilters:
+            level >= 3 && supportsAgentFilters(command.name) ? normalizedAgentFilterOptions : undefined,
+          agentOutputOptions:
+            level >= 3 && supportsAgentFilters(command.name) ? normalizedAgentOutputOptions : undefined,
+        };
+      });
 
     const payload = {
       generatedAt: new Date().toISOString(),

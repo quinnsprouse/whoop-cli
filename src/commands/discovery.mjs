@@ -3,9 +3,12 @@ import {
   option,
 } from "../lib/command-options.mjs";
 import { CLI_NAME } from "../lib/project-info.mjs";
-
-const WHOOP_AUTHORIZATION_URL = "https://api.prod.whoop.com/oauth/oauth2/auth";
-const WHOOP_TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token";
+import {
+  WHOOP_AUTHORIZATION_URL,
+  WHOOP_SCOPES,
+  WHOOP_TOKEN_URL,
+  buildEndpointCoverage,
+} from "../lib/whoop-endpoint-catalog.mjs";
 
 function requireCommandRegistry(commandRegistry) {
   if (!commandRegistry) {
@@ -70,33 +73,8 @@ export async function commandCapabilities(flags, deps) {
         "Refreshing invalidates previous access and refresh tokens",
       ],
     },
-    scopes: {
-      "read:profile": "Read basic profile (name/email/user_id)",
-      "read:body_measurement": "Read body measurements (height/weight/max HR)",
-      "read:workout": "Read workout activities",
-      "read:sleep": "Read sleep activities",
-      "read:recovery": "Read recovery activities",
-      "read:cycles": "Read cycle activities",
-      offline: "Request refresh_token for long-running access",
-    },
-    endpointCoverage: {
-      profile: ["GET /v2/user/profile/basic", "GET /v2/user/measurement/body"],
-      collections: [
-        "GET /v2/cycle",
-        "GET /v2/recovery",
-        "GET /v2/activity/sleep",
-        "GET /v2/activity/workout",
-      ],
-      byId: [
-        "GET /v2/cycle/{cycleId}",
-        "GET /v2/cycle/{cycleId}/recovery",
-        "GET /v2/cycle/{cycleId}/sleep",
-        "GET /v2/activity/sleep/{sleepId}",
-        "GET /v2/activity/sleep/{sleepId}/stream",
-        "GET /v2/activity/workout/{workoutId}",
-      ],
-      accountControl: ["DELETE /v2/user/access"],
-    },
+    scopes: WHOOP_SCOPES,
+    endpointCoverage: buildEndpointCoverage(),
     pagination: {
       query: ["limit", "start", "end", "nextToken"],
       responseField: "next_token",

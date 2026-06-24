@@ -10,6 +10,10 @@ import {
   option,
 } from "../lib/command-options.mjs";
 import { CLI_NAME } from "../lib/project-info.mjs";
+import { shapeEndpointRecord } from "../lib/record-shape.mjs";
+import {
+  ENDPOINT_COMMAND_CATALOG,
+} from "../lib/whoop-endpoint-catalog.mjs";
 
 function requirePositiveIntegerFlag(value, {
   command,
@@ -33,28 +37,6 @@ function requirePositiveIntegerFlag(value, {
 
 function identity(value) {
   return value;
-}
-
-function attachLocalDateFields(record, deps) {
-  if (!record || typeof record !== "object") return record;
-  const { toDateOnlyInTimeZone, formatDateTimeInTimeZone, timeZone } = deps;
-  const baseDate = record.start ?? record.created_at ?? record.updated_at ?? null;
-  return {
-    ...record,
-    localDate: toDateOnlyInTimeZone(baseDate, timeZone, {
-      assumeUtcForOffsetlessDateTime: true,
-    }),
-    localStart: record.start
-      ? formatDateTimeInTimeZone(record.start, timeZone, {
-        assumeUtcForOffsetlessDateTime: true,
-      })
-      : null,
-    localEnd: record.end
-      ? formatDateTimeInTimeZone(record.end, timeZone, {
-        assumeUtcForOffsetlessDateTime: true,
-      })
-      : null,
-  };
 }
 
 async function writeEndpointPayload(command, record, key, value, flags, deps) {
@@ -117,6 +99,8 @@ function buildEndpointOptions({
 }
 
 function createEndpointCommandRegistration({
+  endpoint,
+  endpointKey,
   name,
   summary,
   input,
@@ -153,13 +137,15 @@ function createEndpointCommandRegistration({
     });
     const client = await withClient(flags);
     const rawRecord = await fetchRecord({ client, value, flags, deps });
-    const record = localDateFields ? attachLocalDateFields(rawRecord, deps) : rawRecord;
+    const record = localDateFields ? shapeEndpointRecord(rawRecord, deps.timeZone) : rawRecord;
     await writeEndpointPayload(name, record, outputKey, value, flags, deps);
   }
 
   return {
     name,
     summary,
+    endpoint,
+    endpointKey,
     usage: [
       commandInvocation(name, [
         `--${input.flagName}`,
@@ -191,125 +177,39 @@ function createEndpointCommandRegistration({
 
 const parsePositiveInteger = (value, context) => requirePositiveIntegerFlag(value, context);
 
-const endpointCommandSpecs = [
-  {
-    name: "cycle-by-id",
-    summary: "Fetch a cycle activity by WHOOP cycle ID.",
-    input: {
-      flagName: "cycle-id",
-      valueLabel: "int",
-      description: "WHOOP cycle identifier.",
-      example: "123456",
-      stdinDescription: "Pipe a cycle ID as plain text.",
-      schema: { type: "integer", min: 1 },
-      parse: parsePositiveInteger,
-    },
-    outputKey: "cycleId",
-    fetchRecord: ({ client, value }) => client.getCycleById(value),
-    localDateFields: true,
-  },
-  {
-    name: "activity-map",
-    summary: "Map legacy v1 activity ID to v2 UUID via WHOOP mapping endpoint.",
-    input: {
-      flagName: "activity-v1-id",
-      valueLabel: "int",
-      description: "Legacy WHOOP v1 activity ID.",
-      example: "12345",
-      stdinDescription: "Pipe a legacy v1 activity ID as plain text.",
-      schema: { type: "integer", min: 1 },
-      parse: parsePositiveInteger,
-    },
-    outputKey: "activityV1Id",
-    fetchRecord: ({ client, value }) => client.getActivityMapping(value),
-  },
-  {
-    name: "sleep-by-id",
-    summary: "Fetch a sleep activity by WHOOP sleep UUID.",
-    input: {
-      flagName: "sleep-id",
-      valueLabel: "uuid",
-      description: "WHOOP sleep UUID.",
-      example: "<uuid>",
-      stdinDescription: "Pipe a sleep UUID as plain text.",
-    },
-    outputKey: "sleepId",
-    fetchRecord: ({ client, value }) => client.getSleepById(value),
-    localDateFields: true,
-  },
-  {
-    name: "sleep-stream",
-    summary: "Fetch raw sleep signal stream data by WHOOP sleep UUID.",
-    input: {
-      flagName: "sleep-id",
-      valueLabel: "uuid",
-      description: "WHOOP sleep UUID.",
-      example: "<uuid>",
-      stdinDescription: "Pipe a sleep UUID as plain text.",
-    },
-    outputKey: "sleepId",
-    extraOptions: [
-      option(
-        "--types <csv>",
-        "Stream signals to include: hr, skin_temp, board_temp, battery_temp, sleep_classification, charging_status.",
-      ),
-    ],
-    directUsageArgs: ["[--types hr,skin_temp]"],
-    stdinUsageArgs: ["[--types hr]"],
-    directExampleArgs: ["--types", "hr,skin_temp"],
-    stdinExampleArgs: ["--types", "hr"],
+function withEndpointCommandImplementation(spec) {
+  const input = {
+    ...spec.input,
+    parse: spec.input.parseType === "positive-integer" ? parsePositiveInteger : spec.input.parse,
+  };
+
+  const streamTypes = Array.isArray(spec.streamTypes) ? spec.streamTypes : [];
+  return {
+    ...spec,
+    input,
+    extraOptions: streamTypes.length > 0
+      ? [
+        option(
+          "--types <csv>",
+          `Stream signals to include: ${streamTypes.join(", ")}.`,
+        ),
+      ]
+      : spec.extraOptions,
+    directUsageArgs: streamTypes.length > 0 ? ["[--types hr,skin_temp]"] : spec.directUsageArgs,
+    stdinUsageArgs: streamTypes.length > 0 ? ["[--types hr]"] : spec.stdinUsageArgs,
+    directExampleArgs: streamTypes.length > 0 ? ["--types", "hr,skin_temp"] : spec.directExampleArgs,
+    stdinExampleArgs: streamTypes.length > 0 ? ["--types", "hr"] : spec.stdinExampleArgs,
     fetchRecord: ({ client, value, flags }) => {
-      const types = flags.types ? String(flags.types).trim() : null;
-      return client.getSleepStream(value, { types });
+      if (streamTypes.length > 0) {
+        const types = flags.types ? String(flags.types).trim() : null;
+        return client[spec.clientMethod](value, { types });
+      }
+      return client[spec.clientMethod](value);
     },
-  },
-  {
-    name: "workout-by-id",
-    summary: "Fetch a workout activity by WHOOP workout UUID.",
-    input: {
-      flagName: "workout-id",
-      valueLabel: "uuid",
-      description: "WHOOP workout UUID.",
-      example: "<uuid>",
-      stdinDescription: "Pipe a workout UUID as plain text.",
-    },
-    outputKey: "workoutId",
-    fetchRecord: ({ client, value }) => client.getWorkoutById(value),
-    localDateFields: true,
-  },
-  {
-    name: "cycle-recovery",
-    summary: "Fetch recovery record for a specific cycle ID.",
-    input: {
-      flagName: "cycle-id",
-      valueLabel: "int",
-      description: "WHOOP cycle identifier.",
-      example: "123456",
-      stdinDescription: "Pipe a cycle ID as plain text.",
-      schema: { type: "integer", min: 1 },
-      parse: parsePositiveInteger,
-    },
-    outputKey: "cycleId",
-    fetchRecord: ({ client, value }) => client.getRecoveryForCycle(value),
-    localDateFields: true,
-  },
-  {
-    name: "cycle-sleep",
-    summary: "Fetch sleep record for a specific cycle ID.",
-    input: {
-      flagName: "cycle-id",
-      valueLabel: "int",
-      description: "WHOOP cycle identifier.",
-      example: "123456",
-      stdinDescription: "Pipe a cycle ID as plain text.",
-      schema: { type: "integer", min: 1 },
-      parse: parsePositiveInteger,
-    },
-    outputKey: "cycleId",
-    fetchRecord: ({ client, value }) => client.getSleepForCycle(value),
-    localDateFields: true,
-  },
-];
+  };
+}
+
+const endpointCommandSpecs = ENDPOINT_COMMAND_CATALOG.map(withEndpointCommandImplementation);
 
 export const endpointCommandRegistrationList = endpointCommandSpecs.map(
   (spec) => createEndpointCommandRegistration(spec),

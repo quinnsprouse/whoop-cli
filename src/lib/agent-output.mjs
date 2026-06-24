@@ -36,22 +36,27 @@ export function projectRecordFields(record, fields) {
   return output;
 }
 
+export function projectRecords(records, fields) {
+  const selectedFields = Array.isArray(fields) ? fields : splitCsv(fields);
+  if (!Array.isArray(records)) return [];
+  if (selectedFields.length === 0) return [...records];
+  return records.map((record) => projectRecordFields(record, selectedFields));
+}
+
 export function isJsonMode(flags) {
   return Boolean(flags?.json || flags?.jsonl || flags?.csv);
 }
 
-export function recordsFromPayload(payload) {
-  if (Array.isArray(payload?.records)) return payload.records;
-  if (Array.isArray(payload)) return payload;
-  if (payload?.record && typeof payload.record === "object") return [payload.record];
-  if (payload && typeof payload === "object") return [payload];
-  return [];
+function isRecordObject(value) {
+  return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
-function recordsFromJsonlPayload(payload) {
-  if (Array.isArray(payload?.records)) return payload.records;
+export function recordsFromPayload(payload) {
   if (Array.isArray(payload)) return payload;
-  return [];
+  if (!isRecordObject(payload)) return [];
+  if (Array.isArray(payload.records)) return payload.records;
+  if (isRecordObject(payload.record)) return [payload.record];
+  return [payload];
 }
 
 export function withTimeZoneMeta(payload, timeZone) {
@@ -61,6 +66,7 @@ export function withTimeZoneMeta(payload, timeZone) {
 }
 
 export function toRecordsOnlyPayload(payload) {
+  const records = recordsFromPayload(payload);
   return {
     mode: payload?.mode ?? null,
     generatedAt: payload?.generatedAt ?? new Date().toISOString(),
@@ -68,10 +74,38 @@ export function toRecordsOnlyPayload(payload) {
     query: payload?.query ?? null,
     filters: payload?.filters ?? null,
     member: payload?.member ?? null,
-    count: Array.isArray(payload?.records) ? payload.records.length : payload?.count ?? 0,
-    records: Array.isArray(payload?.records) ? payload.records : [],
+    count: records.length,
+    records,
     limitations: payload?.limitations ?? undefined,
   };
+}
+
+function projectPayloadRecords(payload, fields) {
+  if (fields.length === 0) return payload;
+  if (Array.isArray(payload)) return projectRecords(payload, fields);
+  if (!payload || typeof payload !== "object") return payload;
+
+  if (Array.isArray(payload.records)) {
+    return {
+      ...payload,
+      records: projectRecords(payload.records, fields),
+    };
+  }
+
+  if (isRecordObject(payload.record)) {
+    return {
+      ...payload,
+      record: projectRecordFields(payload.record, fields),
+    };
+  }
+
+  return projectRecordFields(payload, fields);
+}
+
+export function prepareAgentOutputPayload(payload, flags = {}) {
+  const fields = splitCsv(flags.fields);
+  const projectedPayload = projectPayloadRecords(payload, fields);
+  return flags["records-only"] ? toRecordsOnlyPayload(projectedPayload) : projectedPayload;
 }
 
 function formatCsvCell(value) {
@@ -124,7 +158,7 @@ export function renderCsv(payload, flags = {}) {
 }
 
 export function renderJsonl(payload) {
-  return recordsFromJsonlPayload(payload).map((item) => JSON.stringify(item)).join("\n");
+  return recordsFromPayload(payload).map((item) => JSON.stringify(item)).join("\n");
 }
 
 export function renderJson(payload) {
@@ -132,7 +166,8 @@ export function renderJson(payload) {
 }
 
 export function renderOutput(payload, flags = {}, textRenderer = null, timeZone = null) {
-  const payloadWithTimeZone = withTimeZoneMeta(payload, timeZone);
+  const outputPayload = prepareAgentOutputPayload(payload, flags);
+  const payloadWithTimeZone = withTimeZoneMeta(outputPayload, timeZone);
 
   if (flags.csv) {
     return {

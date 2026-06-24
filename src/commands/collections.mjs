@@ -10,6 +10,16 @@ import {
   buildSingleLocalDayQueryWindow,
 } from "../lib/local-day-query-window.mjs";
 import { CLI_NAME } from "../lib/project-info.mjs";
+import {
+  shapeCycleRecord,
+  shapeRecords,
+  shapeRecoveryRecord,
+  shapeSleepRecord,
+  shapeWorkoutRecord,
+} from "../lib/record-shape.mjs";
+import {
+  COLLECTION_COMMAND_CATALOG,
+} from "../lib/whoop-endpoint-catalog.mjs";
 
 function toBoolean(value, fallback = false) {
   if (value == null) return fallback;
@@ -21,70 +31,20 @@ function toBoolean(value, fallback = false) {
   return fallback;
 }
 
-function toDurationSeconds(start, end) {
-  const left = new Date(start).getTime();
-  const right = new Date(end).getTime();
-  if (!Number.isFinite(left) || !Number.isFinite(right) || right < left) return null;
-  return Math.round((right - left) / 1000);
-}
-
-function withCommonRecordShape(record, recordType, deps) {
-  const { toDateOnlyInTimeZone, formatDateTimeInTimeZone, timeZone } = deps;
-  const localDate = toDateOnlyInTimeZone(record.start ?? record.created_at, timeZone, {
-    assumeUtcForOffsetlessDateTime: true,
-  });
-
-  return {
-    ...record,
-    recordType,
-    localDate,
-    localStart: formatDateTimeInTimeZone(record.start ?? record.created_at, timeZone, {
-      assumeUtcForOffsetlessDateTime: true,
-    }),
-  };
-}
-
 function normalizeCycleRecords(records, deps) {
-  return (Array.isArray(records) ? records : []).map((record) => {
-    const normalized = withCommonRecordShape(record, "cycle", deps);
-    return {
-      ...normalized,
-      strain: Number.isFinite(Number(record?.score?.strain)) ? Number(record.score.strain) : null,
-    };
-  });
+  return shapeRecords(records, shapeCycleRecord, deps.timeZone);
 }
 
 function normalizeRecoveryRecords(records, deps) {
-  return (Array.isArray(records) ? records : []).map((record) => {
-    const normalized = withCommonRecordShape(record, "recovery", deps);
-    return {
-      ...normalized,
-      recovery_score: Number.isFinite(Number(record?.score?.recovery_score))
-        ? Number(record.score.recovery_score)
-        : null,
-    };
-  });
+  return shapeRecords(records, shapeRecoveryRecord, deps.timeZone);
 }
 
 function normalizeSleepRecords(records, deps) {
-  return (Array.isArray(records) ? records : []).map((record) => {
-    const normalized = withCommonRecordShape(record, record?.nap ? "nap" : "sleep", deps);
-    return {
-      ...normalized,
-      durationInSeconds: toDurationSeconds(record.start, record.end),
-    };
-  });
+  return shapeRecords(records, shapeSleepRecord, deps.timeZone);
 }
 
 function normalizeWorkoutRecords(records, deps) {
-  return (Array.isArray(records) ? records : []).map((record) => {
-    const normalized = withCommonRecordShape(record, "workout", deps);
-    return {
-      ...normalized,
-      durationInSeconds: toDurationSeconds(record.start, record.end),
-      strain: Number.isFinite(Number(record?.score?.strain)) ? Number(record.score.strain) : null,
-    };
-  });
+  return shapeRecords(records, shapeWorkoutRecord, deps.timeZone);
 }
 
 function formatCollectionText(value, deps) {
@@ -123,7 +83,6 @@ async function runCollectionCommand(command, endpointName, normalizeRecords, fla
   const {
     withClient,
     applyAgentRecordFilters,
-    toRecordsOnlyPayload,
     isJsonMode,
     writeOutput,
     hasAgentRecordTransforms,
@@ -153,6 +112,7 @@ async function runCollectionCommand(command, endpointName, normalizeRecords, fla
     normalizedRecords,
     flags,
     deps.timeZone,
+    { queryWindow },
   );
 
   const payload = {
@@ -182,17 +142,16 @@ async function runCollectionCommand(command, endpointName, normalizeRecords, fla
     },
   };
 
-  const outputPayload = flags["records-only"] ? toRecordsOnlyPayload(payload) : payload;
   const hasTransforms = hasAgentRecordTransforms(flags);
 
   if (!isJsonMode(flags)) {
-    await writeOutput(outputPayload, flags, (value) =>
+    await writeOutput(payload, flags, (value) =>
       formatCollectionText({ ...value, command }, { hasAgentRecordTransforms, hasTransforms }),
     );
     return;
   }
 
-  await writeOutput(outputPayload, { ...flags, json: !flags.jsonl });
+  await writeOutput(payload, { ...flags, json: !flags.jsonl });
 }
 
 export async function commandCycles(flags, deps) {
@@ -302,20 +261,23 @@ export async function commandDay(flags, deps) {
   await writeOutput(payload, { ...flags, json: !flags.jsonl });
 }
 
-export const collectionCommandRegistrations = {
+function collectionCommandOptions() {
+  return [
+    ...AUTH_CLIENT_OPTIONS,
+    ...COLLECTION_WINDOW_OPTIONS,
+    ...STRUCTURED_OUTPUT_OPTIONS,
+    TIMEZONE_OPTION,
+  ];
+}
+
+function collectionUsage(commandName) {
+  return [
+    `${CLI_NAME} ${commandName} [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl|--csv]`,
+  ];
+}
+
+const localCollectionCommandMetadata = {
   cycles: {
-    name: "cycles",
-    summary: "List cycle records in a date window.",
-    agentFilters: true,
-    usage: [
-      `${CLI_NAME} cycles [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl|--csv]`,
-    ],
-    options: [
-      ...AUTH_CLIENT_OPTIONS,
-      ...COLLECTION_WINDOW_OPTIONS,
-      ...STRUCTURED_OUTPUT_OPTIONS,
-      TIMEZONE_OPTION,
-    ],
     examples: [
       `${CLI_NAME} cycles --days 14 --json`,
       `${CLI_NAME} cycles --from 2026-03-01 --to 2026-03-25 --all-pages --jsonl`,
@@ -324,18 +286,6 @@ export const collectionCommandRegistrations = {
     handler: commandCycles,
   },
   recoveries: {
-    name: "recoveries",
-    summary: "List recovery records in a date window.",
-    agentFilters: true,
-    usage: [
-      `${CLI_NAME} recoveries [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl|--csv]`,
-    ],
-    options: [
-      ...AUTH_CLIENT_OPTIONS,
-      ...COLLECTION_WINDOW_OPTIONS,
-      ...STRUCTURED_OUTPUT_OPTIONS,
-      TIMEZONE_OPTION,
-    ],
     examples: [
       `${CLI_NAME} recoveries --days 30 --json`,
       `${CLI_NAME} recoveries --days 60 --max-recovery 40 --sort recovery --jsonl`,
@@ -344,18 +294,6 @@ export const collectionCommandRegistrations = {
     handler: commandRecoveries,
   },
   sleep: {
-    name: "sleep",
-    summary: "List sleep records in a date window.",
-    agentFilters: true,
-    usage: [
-      `${CLI_NAME} sleep [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl|--csv]`,
-    ],
-    options: [
-      ...AUTH_CLIENT_OPTIONS,
-      ...COLLECTION_WINDOW_OPTIONS,
-      ...STRUCTURED_OUTPUT_OPTIONS,
-      TIMEZONE_OPTION,
-    ],
     examples: [
       `${CLI_NAME} sleep --days 14 --json`,
       `${CLI_NAME} sleep --from 2026-03-01 --to 2026-03-25 --fields id,start,end,score.sleep_performance_percentage --json`,
@@ -364,18 +302,6 @@ export const collectionCommandRegistrations = {
     handler: commandSleep,
   },
   workouts: {
-    name: "workouts",
-    summary: "List workout records in a date window.",
-    agentFilters: true,
-    usage: [
-      `${CLI_NAME} workouts [--days <n>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit <n>] [--all-pages] [--json|--jsonl|--csv]`,
-    ],
-    options: [
-      ...AUTH_CLIENT_OPTIONS,
-      ...COLLECTION_WINDOW_OPTIONS,
-      ...STRUCTURED_OUTPUT_OPTIONS,
-      TIMEZONE_OPTION,
-    ],
     examples: [
       `${CLI_NAME} workouts --days 14 --json`,
       `${CLI_NAME} workouts --days 30 --min-strain 12 --sort strain-desc --result-limit 20 --json`,
@@ -383,6 +309,34 @@ export const collectionCommandRegistrations = {
     ],
     handler: commandWorkouts,
   },
+};
+
+function createCollectionCommandRegistration(catalogEntry) {
+  const localMetadata = localCollectionCommandMetadata[catalogEntry.name];
+  if (!localMetadata) {
+    throw new Error(`Missing local collection command metadata for "${catalogEntry.name}".`);
+  }
+
+  return {
+    name: catalogEntry.name,
+    summary: catalogEntry.summary,
+    endpoint: catalogEntry.endpoint,
+    endpointKey: catalogEntry.endpointKey,
+    agentFilters: true,
+    usage: collectionUsage(catalogEntry.name),
+    options: collectionCommandOptions(),
+    ...localMetadata,
+  };
+}
+
+export const collectionCommandRegistrationList = COLLECTION_COMMAND_CATALOG.map(
+  createCollectionCommandRegistration,
+);
+
+export const collectionCommandRegistrations = {
+  ...Object.fromEntries(
+    collectionCommandRegistrationList.map((registration) => [registration.name, registration]),
+  ),
   day: {
     name: "day",
     summary: "Fetch one local-day snapshot across cycles, recoveries, sleep, and workouts.",

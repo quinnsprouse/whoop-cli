@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  COLLECTION_COMMAND_CATALOG,
   COMMANDS,
   COMMAND_FLAG_ALLOWLIST,
   COMMAND_REGISTRY,
+  ENDPOINT_COMMAND_CATALOG,
+  buildEndpointCoverage,
 } from "../src/lib/command-manifest.mjs";
 import {
   COMMAND_REGISTRATIONS,
@@ -13,16 +16,13 @@ import {
   endpointCommandRegistrationList,
   endpointCommandRegistrations,
 } from "../src/commands/endpoints.mjs";
+import {
+  collectionCommandRegistrationList,
+  collectionCommandRegistrations,
+} from "../src/commands/collections.mjs";
 
-const EXPECTED_ENDPOINT_COMMAND_NAMES = [
-  "cycle-by-id",
-  "activity-map",
-  "sleep-by-id",
-  "sleep-stream",
-  "workout-by-id",
-  "cycle-recovery",
-  "cycle-sleep",
-];
+const EXPECTED_ENDPOINT_COMMAND_NAMES = ENDPOINT_COMMAND_CATALOG.map((entry) => entry.name);
+const EXPECTED_COLLECTION_COMMAND_NAMES = COLLECTION_COMMAND_CATALOG.map((entry) => entry.name);
 
 const EXPECTED_COMMAND_NAMES = [
   "help",
@@ -36,10 +36,7 @@ const EXPECTED_COMMAND_NAMES = [
   "whoami",
   "profile",
   "body",
-  "cycles",
-  "recoveries",
-  "sleep",
-  "workouts",
+  ...EXPECTED_COLLECTION_COMMAND_NAMES,
   ...EXPECTED_ENDPOINT_COMMAND_NAMES,
   "day",
   "revoke",
@@ -96,6 +93,64 @@ test("endpoint command registrations stay localized to endpoint module", () => {
       `${registration.name} should document stdin examples`,
     );
   }
+});
+
+test("collection command registrations derive catalog metadata but keep local handlers", () => {
+  assert.deepEqual(
+    collectionCommandRegistrationList.map((registration) => registration.name),
+    EXPECTED_COLLECTION_COMMAND_NAMES,
+  );
+
+  const firstCollectionIndex = COMMAND_REGISTRATIONS.findIndex(
+    (registration) => registration.name === EXPECTED_COLLECTION_COMMAND_NAMES[0],
+  );
+  assert.notEqual(firstCollectionIndex, -1);
+  assert.deepEqual(
+    COMMAND_REGISTRATIONS.slice(
+      firstCollectionIndex,
+      firstCollectionIndex + collectionCommandRegistrationList.length,
+    ),
+    collectionCommandRegistrationList,
+  );
+
+  for (const catalogEntry of COLLECTION_COMMAND_CATALOG) {
+    const registration = collectionCommandRegistrations[catalogEntry.name];
+    assert.equal(registration.summary, catalogEntry.summary);
+    assert.deepEqual(registration.endpoint, catalogEntry.endpoint);
+    assert.equal(registration.endpointKey, catalogEntry.endpointKey);
+    assert.equal(typeof registration.handler, "function");
+    assert.ok(
+      registration.usage.some((entry) => entry.includes(`${catalogEntry.name} [--days <n>]`)),
+      `${catalogEntry.name} should keep local collection usage shape`,
+    );
+    assert.ok(COMMAND_REGISTRY.filterableCommands.has(catalogEntry.name));
+  }
+
+  const workouts = COLLECTION_COMMAND_CATALOG.find((entry) => entry.name === "workouts");
+  assert.deepEqual(COMMANDS.workouts.endpoint, workouts.endpoint);
+  assert.deepEqual(COMMAND_REGISTRY.buildCommandHelpPayload("workouts").endpoints, [
+    workouts.endpoint,
+  ]);
+});
+
+test("endpoint command metadata derives from endpoint catalog", () => {
+  for (const catalogEntry of ENDPOINT_COMMAND_CATALOG) {
+    const registration = endpointCommandRegistrations[catalogEntry.name];
+    assert.equal(registration.summary, catalogEntry.summary);
+    assert.deepEqual(registration.endpoint, catalogEntry.endpoint);
+    assert.equal(registration.endpointKey, catalogEntry.endpointKey);
+    assert.ok(
+      registration.options.some((option) => option.name === catalogEntry.input.flagName),
+      `${catalogEntry.name} should expose catalog input flag`,
+    );
+  }
+
+  const sleepStream = ENDPOINT_COMMAND_CATALOG.find((entry) => entry.name === "sleep-stream");
+  assert.deepEqual(COMMANDS["sleep-stream"].endpoint, sleepStream.endpoint);
+  assert.deepEqual(COMMAND_REGISTRY.buildCommandHelpPayload("sleep-stream").endpoints, [
+    sleepStream.endpoint,
+  ]);
+  assert.ok(buildEndpointCoverage().byId.includes("GET /v2/activity/sleep/{sleepId}/stream"));
 });
 
 test("csv mode is allowlisted for data and endpoint commands", () => {

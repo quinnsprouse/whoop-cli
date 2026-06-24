@@ -16,3 +16,12 @@ export {
   GLOBAL_NOTES,
   PROJECT_NOTICE,
 } from "./project-info.mjs";
+
+export {
+  COLLECTION_COMMAND_CATALOG,
+  COLLECTION_ENDPOINTS,
+  ENDPOINT_COMMAND_CATALOG,
+  USER_ENDPOINTS,
+  WHOOP_SCOPES,
+  buildEndpointCoverage,
+} from "./whoop-endpoint-catalog.mjs";

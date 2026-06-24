@@ -3,7 +3,10 @@ import test from "node:test";
 import {
   createAgentOutput,
   isJsonMode,
+  prepareAgentOutputPayload,
   projectRecordFields,
+  projectRecords,
+  recordsFromPayload,
   renderCsv,
   renderJsonl,
   toRecordsOnlyPayload,
@@ -140,6 +143,21 @@ test("agent output projection and records-only helpers are reusable", () => {
   );
 
   assert.deepEqual(
+    projectRecords([{ id: "a", score: { strain: 12.5 } }], ["id", "score.strain", "missing"]),
+    [
+      {
+        id: "a",
+        "score.strain": 12.5,
+        missing: null,
+      },
+    ],
+  );
+
+  assert.deepEqual(recordsFromPayload({ record: { id: "singleton-1" } }), [
+    { id: "singleton-1" },
+  ]);
+
+  assert.deepEqual(
     toRecordsOnlyPayload({
       mode: "private",
       generatedAt: "2026-03-20T10:00:00.000Z",
@@ -163,6 +181,103 @@ test("agent output projection and records-only helpers are reusable", () => {
     },
   );
 
+  assert.deepEqual(
+    toRecordsOnlyPayload({
+      mode: "private",
+      generatedAt: "2026-03-20T10:00:00.000Z",
+      command: "activity-map",
+      record: { id: "workout-1", v1_activity_id: 12345 },
+    }),
+    {
+      mode: "private",
+      generatedAt: "2026-03-20T10:00:00.000Z",
+      command: "activity-map",
+      query: null,
+      filters: null,
+      member: null,
+      count: 1,
+      records: [{ id: "workout-1", v1_activity_id: 12345 }],
+      limitations: undefined,
+    },
+  );
+
   assert.equal(renderJsonl({ records: [{ id: 1 }, { id: 2 }] }), '{"id":1}\n{"id":2}');
-  assert.equal(renderJsonl({ record: { id: 1 } }), "");
+  assert.equal(renderJsonl({ record: { id: 1 } }), '{"id":1}');
+});
+
+test("agent output prepares projected records-only payloads during rendering", async () => {
+  const harness = createOutputHarness();
+  const payload = {
+    mode: "private",
+    generatedAt: "2026-03-20T10:00:00.000Z",
+    command: "workouts",
+    query: { limit: 25 },
+    filters: { fields: ["id", "score.strain"] },
+    records: [{ id: "workout-1", score: { strain: 9.2 }, extra: true }],
+    pagination: { nextToken: "heavy" },
+  };
+
+  assert.deepEqual(
+    prepareAgentOutputPayload(payload, {
+      fields: "id,score.strain",
+      "records-only": true,
+    }),
+    {
+      mode: "private",
+      generatedAt: "2026-03-20T10:00:00.000Z",
+      command: "workouts",
+      query: { limit: 25 },
+      filters: { fields: ["id", "score.strain"] },
+      member: null,
+      count: 1,
+      records: [{ id: "workout-1", "score.strain": 9.2 }],
+      limitations: undefined,
+    },
+  );
+
+  await harness.agentOutput.writeOutput(
+    payload,
+    {
+      fields: "id,score.strain",
+      "records-only": true,
+      json: true,
+    },
+  );
+
+  const rendered = JSON.parse(harness.stdout);
+  assert.equal(rendered.pagination, undefined);
+  assert.deepEqual(rendered.records, [{ id: "workout-1", "score.strain": 9.2 }]);
+  assert.equal(rendered.timeZone, "America/New_York");
+});
+
+test("agent output projects singleton records through the records-only extraction path", () => {
+  assert.deepEqual(
+    prepareAgentOutputPayload(
+      {
+        mode: "private",
+        generatedAt: "2026-03-20T10:00:00.000Z",
+        command: "activity-map",
+        record: {
+          id: "workout-1",
+          score: { strain: 9.2 },
+          extra: true,
+        },
+      },
+      {
+        fields: "id,score.strain,missing",
+        "records-only": true,
+      },
+    ),
+    {
+      mode: "private",
+      generatedAt: "2026-03-20T10:00:00.000Z",
+      command: "activity-map",
+      query: null,
+      filters: null,
+      member: null,
+      count: 1,
+      records: [{ id: "workout-1", "score.strain": 9.2, missing: null }],
+      limitations: undefined,
+    },
+  );
 });

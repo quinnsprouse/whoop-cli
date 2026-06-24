@@ -1,6 +1,6 @@
 {
   "name": "whoop-query-cli",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Unofficial CLI for authenticating with WHOOP and querying v2 user data",
   "main": "src/cli.mjs",
   "bin": {

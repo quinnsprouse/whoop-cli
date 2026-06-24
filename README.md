@@ -136,6 +136,7 @@ whoop-query-cli capabilities --json
 ## Agent-Friendly CLI Notes
 
 - Global help stays short. Use `whoop-query-cli help <command>` to get the options and examples for one command.
+- `help <command> --json`, `discover --level 2 --json`, and `capabilities --json` expose catalog-backed endpoint method, path, and scope metadata.
 - Required single inputs can come from flags or stdin:
 
 ```bash

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildLocalDateFilterWindow,
   buildLocalDayQueryWindow,
   buildSingleLocalDayQueryWindow,
+  filterRecordsToLocalDayQueryWindow,
 } from "../src/lib/local-day-query-window.mjs";
 
 function durationHours(window) {
@@ -111,6 +113,58 @@ test("single local-day query window uses the same local midnight conversion", ()
   assert.equal(window.date, "2026-11-01");
   assert.equal(window.start, "2026-11-01T04:00:00.000Z");
   assert.equal(window.end, "2026-11-02T05:00:00.000Z");
+});
+
+test("local-date filter windows share date parsing and range validation", () => {
+  const window = buildLocalDateFilterWindow({
+    flags: { from: "2026-03-08", to: "2026-03-09" },
+    timeZone: "America/New_York",
+  });
+
+  assert.deepEqual(window, {
+    fromDate: "2026-03-08",
+    toDate: "2026-03-09",
+    source: "local-date-filter",
+    timeZone: "America/New_York",
+  });
+
+  assert.deepEqual(
+    buildLocalDateFilterWindow({
+      flags: { fromDate: "2026-03-08", toDate: "2026-03-09" },
+      timeZone: "America/New_York",
+    }),
+    window,
+  );
+
+  assert.throws(
+    () =>
+      buildLocalDateFilterWindow({
+        flags: { from: "2026-03-09", to: "2026-03-08" },
+        timeZone: "America/New_York",
+      }),
+    /--to .* is before --from/,
+  );
+});
+
+test("local-day query window filters fetched records by resolved local date", () => {
+  const queryWindow = buildLocalDayQueryWindow({
+    flags: { from: "2026-03-08", to: "2026-03-08" },
+    timeZone: "America/New_York",
+  });
+  const records = [
+    { id: "inside", start: "2026-03-08T05:30:00Z" },
+    { id: "outside", start: "2026-03-09T04:30:00Z" },
+    { id: "undated" },
+  ];
+
+  assert.deepEqual(
+    filterRecordsToLocalDayQueryWindow(records, queryWindow).map((record) => record.id),
+    ["inside"],
+  );
+  assert.deepEqual(
+    filterRecordsToLocalDayQueryWindow(records, { source: "explicit-datetime" }),
+    records,
+  );
 });
 
 test("local-day query window rejects ambiguous or invalid ranges", () => {

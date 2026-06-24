@@ -1,30 +1,25 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import {
+  AuthenticatedRequest,
+  delay,
+  fetchWithRetries,
+  formatHttpError,
+  getPayloadErrorText,
+  parseRetryAfterHeader,
+  tokenIsExpired,
+} from "./lib/authenticated-request.mjs";
+import { DEFAULT_SESSION_FILE, LocalSession } from "./lib/local-session.mjs";
+import {
+  WHOOP_BASE_URL,
+  WHOOP_DEFAULT_SCOPES,
+  buildEndpointPath,
+  getCollectionEndpoint,
+} from "./lib/whoop-endpoint-catalog.mjs";
 
-const WHOOP_BASE_URL = "https://api.prod.whoop.com";
-const WHOOP_DEVELOPER_BASE_URL = `${WHOOP_BASE_URL}/developer`;
-const WHOOP_AUTHORIZATION_URL = `${WHOOP_BASE_URL}/oauth/oauth2/auth`;
-const WHOOP_TOKEN_URL = `${WHOOP_BASE_URL}/oauth/oauth2/token`;
 const DEFAULT_USER_AGENT = "whoop-query-cli/0.1 (unofficial; personal data export; +https://developer.whoop.com)";
-const DEFAULT_SCOPES = [
-  "read:profile",
-  "read:body_measurement",
-  "read:workout",
-  "read:sleep",
-  "read:recovery",
-  "read:cycles",
-  "offline",
-];
-const TOKEN_EXPIRY_SKEW_SECONDS = 60;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
 const DEFAULT_MAX_RETRY_DELAY_MS = 8000;
-const DEFAULT_REFRESH_LOCK_STALE_MS = 60000;
-const DEFAULT_REFRESH_LOCK_TIMEOUT_MS = 90000;
-const DEFAULT_REFRESH_LOCK_POLL_MS = 150;
-const DEFAULT_SESSION_FILE = path.resolve(os.homedir(), ".whoop", "session.json");
 
 function normalizeBaseUrl(value, fallback = WHOOP_BASE_URL) {
   const raw = String(value ?? fallback ?? "").trim().replace(/\/+$/, "");
@@ -34,44 +29,6 @@ function normalizeBaseUrl(value, fallback = WHOOP_BASE_URL) {
   } catch {
     throw new Error(`Invalid WHOOP base URL "${value}". Expected an absolute URL.`);
   }
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
-}
-
-function parseRetryAfterHeader(value) {
-  if (!value) return null;
-  const trimmed = String(value).trim();
-  if (!trimmed) return null;
-
-  const asSeconds = Number(trimmed);
-  if (Number.isFinite(asSeconds) && asSeconds >= 0) {
-    return Math.floor(asSeconds * 1000);
-  }
-
-  const asDateMs = Date.parse(trimmed);
-  if (!Number.isFinite(asDateMs)) return null;
-  const delta = asDateMs - Date.now();
-  if (delta <= 0) return 0;
-  return Math.floor(delta);
-}
-
-function computeRetryDelayMs({
-  attemptIndex,
-  retryAfterMs = null,
-  baseDelayMs = DEFAULT_RETRY_BASE_DELAY_MS,
-  maxDelayMs = DEFAULT_MAX_RETRY_DELAY_MS,
-  random = Math.random,
-}) {
-  if (Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
-    return Math.min(Math.max(0, retryAfterMs), maxDelayMs);
-  }
-
-  const exponent = Math.max(0, Number(attemptIndex) || 0);
-  const backoff = Math.min(maxDelayMs, baseDelayMs * 2 ** exponent);
-  const jitter = (Math.max(0, Math.min(1, Number(random?.()) || 0)) * 0.3 + 0.85) * backoff;
-  return Math.max(baseDelayMs, Math.floor(jitter));
 }
 
 function maskSecret(value) {
@@ -102,22 +59,6 @@ function clampPageLimit(value) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) return 10;
   return Math.max(1, Math.min(parsed, 25));
-}
-
-function extractRateLimit(headers) {
-  if (!headers) return null;
-  return {
-    limit: headers.get("x-ratelimit-limit"),
-    remaining: headers.get("x-ratelimit-remaining"),
-    reset: headers.get("x-ratelimit-reset"),
-  };
-}
-
-function tokenIsExpired(token) {
-  if (!token?.expires_at) return false;
-  const expiresAt = Date.parse(token.expires_at);
-  if (!Number.isFinite(expiresAt)) return false;
-  return Date.now() >= expiresAt - TOKEN_EXPIRY_SKEW_SECONDS * 1000;
 }
 
 function normalizeTokenPayload(payload, fallbackScope) {
@@ -159,53 +100,6 @@ function ensureStateFormat(state) {
   return value;
 }
 
-function formatHttpError(response, payload) {
-  const detail =
-    typeof payload === "string"
-      ? payload
-      : payload && typeof payload === "object"
-        ? JSON.stringify(payload)
-        : "(no payload)";
-  return `Request failed: ${response.status} ${response.statusText} -> ${detail}`;
-}
-
-function getPayloadErrorText(payload) {
-  if (payload == null) return "";
-  if (typeof payload === "string") return payload;
-  if (typeof payload !== "object") return "";
-  return [
-    payload.error,
-    payload.error_description,
-    payload.message,
-    payload.detail,
-    payload.title,
-  ]
-    .filter((value) => value != null && value !== "")
-    .map((value) => String(value))
-    .join(" ");
-}
-
-function isLikelyAuthFailure(status, payload) {
-  if (status === 401) return true;
-  if (status !== 400) return false;
-
-  const text = getPayloadErrorText(payload).toLowerCase();
-  if (!text) return false;
-
-  const signals = [
-    "invalid_token",
-    "expired token",
-    "token expired",
-    "access token",
-    "bearer token",
-    "unauthorized",
-    "authorization",
-    "invalid credentials",
-    "authentication",
-  ];
-  return signals.some((signal) => text.includes(signal));
-}
-
 export class WhoopClient {
   constructor({
     clientId = null,
@@ -220,9 +114,9 @@ export class WhoopClient {
     maxRetries = DEFAULT_MAX_RETRIES,
     retryBaseDelayMs = DEFAULT_RETRY_BASE_DELAY_MS,
     maxRetryDelayMs = DEFAULT_MAX_RETRY_DELAY_MS,
-    refreshLockStaleMs = DEFAULT_REFRESH_LOCK_STALE_MS,
-    refreshLockTimeoutMs = DEFAULT_REFRESH_LOCK_TIMEOUT_MS,
-    refreshLockPollMs = DEFAULT_REFRESH_LOCK_POLL_MS,
+    refreshLockStaleMs,
+    refreshLockTimeoutMs,
+    refreshLockPollMs,
     baseUrl = process.env.WHOOP_BASE_URL ?? WHOOP_BASE_URL,
   } = {}) {
     if (typeof fetchImpl !== "function") {
@@ -233,7 +127,6 @@ export class WhoopClient {
     this.clientSecret = clientSecret;
     this.redirectUri = redirectUri;
     this.requestedScopes = splitScopes(scopes);
-    this.sessionFile = sessionFile;
     this.userAgent = userAgent;
     this.fetch = fetchImpl;
     this.sleep = typeof sleepImpl === "function" ? sleepImpl : delay;
@@ -247,82 +140,61 @@ export class WhoopClient {
       Number.isFinite(maxRetryDelayMs) && maxRetryDelayMs > 0
         ? Math.floor(maxRetryDelayMs)
         : DEFAULT_MAX_RETRY_DELAY_MS;
-    this.refreshLockStaleMs =
-      Number.isFinite(refreshLockStaleMs) && refreshLockStaleMs > 0
-        ? Math.floor(refreshLockStaleMs)
-        : DEFAULT_REFRESH_LOCK_STALE_MS;
-    this.refreshLockTimeoutMs =
-      Number.isFinite(refreshLockTimeoutMs) && refreshLockTimeoutMs > 0
-        ? Math.floor(refreshLockTimeoutMs)
-        : DEFAULT_REFRESH_LOCK_TIMEOUT_MS;
-    this.refreshLockPollMs =
-      Number.isFinite(refreshLockPollMs) && refreshLockPollMs > 0
-        ? Math.floor(refreshLockPollMs)
-        : DEFAULT_REFRESH_LOCK_POLL_MS;
+    this.localSession = new LocalSession({
+      sessionFile,
+      sleepImpl: this.sleep,
+      refreshLockStaleMs,
+      refreshLockTimeoutMs,
+      refreshLockPollMs,
+    });
+    this.sessionFile = this.localSession.sessionFile;
     this.baseUrl = normalizeBaseUrl(baseUrl);
     this.developerBaseUrl = `${this.baseUrl}/developer`;
     this.authorizationUrl = `${this.baseUrl}/oauth/oauth2/auth`;
     this.tokenUrl = `${this.baseUrl}/oauth/oauth2/token`;
-    this.refreshLockFile = `${this.sessionFile}.refresh.lock`;
-    this.session = {
-      tokens: null,
-      pendingAuthorization: null,
-      oauth: null,
-      updatedAt: null,
-    };
-  }
-
-  async loadSession() {
-    try {
-      const raw = await fs.readFile(this.sessionFile, "utf8");
-      const parsed = JSON.parse(raw);
-      this.session = {
-        tokens: parsed.tokens ?? null,
-        pendingAuthorization: parsed.pendingAuthorization ?? null,
-        oauth: parsed.oauth ?? null,
-        updatedAt: parsed.updatedAt ?? null,
-      };
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async saveSession(extra = {}) {
-    const dir = path.dirname(this.sessionFile);
-    await fs.mkdir(dir, { recursive: true });
-
-    const payload = {
-      tokens: this.session.tokens ?? null,
-      pendingAuthorization: this.session.pendingAuthorization ?? null,
-      oauth: this.session.oauth ?? null,
-      updatedAt: new Date().toISOString(),
-      ...extra,
-    };
-
-    await fs.writeFile(this.sessionFile, `${JSON.stringify(payload, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
+    this.refreshLockFile = this.localSession.refreshLockFile;
+    this.authenticatedRequest = new AuthenticatedRequest({
+      developerBaseUrl: this.developerBaseUrl,
+      userAgent: this.userAgent,
+      fetchImpl: this.fetch,
+      sleepImpl: this.sleep,
+      random: this.random,
+      maxRetries: this.maxRetries,
+      retryBaseDelayMs: this.retryBaseDelayMs,
+      maxRetryDelayMs: this.maxRetryDelayMs,
+      tokenStore: {
+        currentToken: () => this.localSession.getToken(),
+        refreshAccessToken: (options) => this.refreshAccessToken(options),
+      },
     });
   }
 
-  async clearSession() {
-    this.session = {
-      tokens: null,
-      pendingAuthorization: null,
-      oauth: null,
-      updatedAt: null,
-    };
+  get session() {
+    return this.localSession.snapshot();
+  }
 
-    try {
-      await fs.unlink(this.sessionFile);
-    } catch {
-      // Ignore if file does not exist.
-    }
+  set session(value) {
+    this.localSession.replace(value);
+  }
+
+  async loadSession() {
+    return this.localSession.load();
+  }
+
+  async saveSession(extra = {}) {
+    await this.localSession.save(extra);
+  }
+
+  async clearSession() {
+    await this.localSession.clear();
+  }
+
+  getSessionStatus() {
+    return this.localSession.getSessionStatus();
   }
 
   #resolveClientId() {
-    return this.clientId ?? process.env.WHOOP_CLIENT_ID ?? this.session.oauth?.clientId ?? null;
+    return this.clientId ?? process.env.WHOOP_CLIENT_ID ?? this.localSession.getOAuth()?.clientId ?? null;
   }
 
   #resolveClientSecret() {
@@ -331,7 +203,7 @@ export class WhoopClient {
 
   #resolveRedirectUri() {
     return (
-      this.redirectUri ?? process.env.WHOOP_REDIRECT_URI ?? this.session.oauth?.redirectUri ?? null
+      this.redirectUri ?? process.env.WHOOP_REDIRECT_URI ?? this.localSession.getOAuth()?.redirectUri ?? null
     );
   }
 
@@ -339,13 +211,13 @@ export class WhoopClient {
     const fromArg = splitScopes(scopesInput);
     const fromConstructor = splitScopes(this.requestedScopes);
     const fromEnv = splitScopes(process.env.WHOOP_SCOPE);
-    const fromSession = splitScopes(this.session.oauth?.scope);
+    const fromSession = splitScopes(this.localSession.getOAuth()?.scope);
     const merged = unique([
       ...fromArg,
       ...fromConstructor,
       ...fromEnv,
       ...fromSession,
-      ...DEFAULT_SCOPES,
+      ...WHOOP_DEFAULT_SCOPES,
     ]);
     return merged;
   }
@@ -391,127 +263,6 @@ export class WhoopClient {
     };
   }
 
-  #isRetryableStatus(status) {
-    return status === 429 || status === 408 || status === 502 || status === 503 || status === 504;
-  }
-
-  #isRetryableFetchError(error) {
-    if (!error) return false;
-    if (error?.name === "AbortError") return false;
-    if (error?.name === "TypeError") return true;
-
-    const code = String(error?.code ?? "").toUpperCase();
-    return (
-      code === "ECONNRESET" ||
-      code === "ECONNREFUSED" ||
-      code === "ETIMEDOUT" ||
-      code === "ENOTFOUND" ||
-      code === "EAI_AGAIN"
-    );
-  }
-
-  async #fetchWithRetries(url, options = {}) {
-    let attemptIndex = 0;
-
-    while (true) {
-      try {
-        const response = await this.fetch(url, options);
-
-        if (!this.#isRetryableStatus(response.status) || attemptIndex >= this.maxRetries) {
-          return response;
-        }
-
-        const retryAfterMs = parseRetryAfterHeader(response.headers?.get("retry-after"));
-        const waitMs = computeRetryDelayMs({
-          attemptIndex,
-          retryAfterMs,
-          baseDelayMs: this.retryBaseDelayMs,
-          maxDelayMs: this.maxRetryDelayMs,
-          random: this.random,
-        });
-
-        await this.sleep(waitMs);
-        attemptIndex += 1;
-      } catch (error) {
-        if (!this.#isRetryableFetchError(error) || attemptIndex >= this.maxRetries) {
-          throw error;
-        }
-
-        const waitMs = computeRetryDelayMs({
-          attemptIndex,
-          baseDelayMs: this.retryBaseDelayMs,
-          maxDelayMs: this.maxRetryDelayMs,
-          random: this.random,
-        });
-
-        await this.sleep(waitMs);
-        attemptIndex += 1;
-      }
-    }
-  }
-
-  async #clearStaleRefreshLock() {
-    try {
-      const stats = await fs.stat(this.refreshLockFile);
-      const ageMs = Date.now() - stats.mtimeMs;
-      if (ageMs >= this.refreshLockStaleMs) {
-        await fs.unlink(this.refreshLockFile);
-      }
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
-  }
-
-  async #acquireRefreshLock() {
-    const startedAt = Date.now();
-
-    while (true) {
-      let handle = null;
-      try {
-        handle = await fs.open(this.refreshLockFile, "wx", 0o600);
-        await handle.writeFile(
-          JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
-          "utf8",
-        );
-
-        let released = false;
-        return async () => {
-          if (released) return;
-          released = true;
-          try {
-            await handle.close();
-          } catch {
-            // Ignore close errors while releasing lock.
-          }
-          try {
-            await fs.unlink(this.refreshLockFile);
-          } catch (error) {
-            if (error?.code !== "ENOENT") throw error;
-          }
-        };
-      } catch (error) {
-        if (handle) {
-          try {
-            await handle.close();
-          } catch {
-            // Ignore close errors during failed lock acquisition.
-          }
-        }
-
-        if (error?.code !== "EEXIST") throw error;
-        await this.#clearStaleRefreshLock();
-
-        if (Date.now() - startedAt >= this.refreshLockTimeoutMs) {
-          throw new Error(
-            `Timed out waiting for refresh lock at ${this.refreshLockFile}.`,
-          );
-        }
-
-        await this.sleep(this.refreshLockPollMs);
-      }
-    }
-  }
-
   buildAuthorizationRequest({ scopes = null, state = null } = {}) {
     const clientId = this.#resolveClientId();
     if (!clientId) {
@@ -543,22 +294,11 @@ export class WhoopClient {
   }
 
   async savePendingAuthorization(authorizationRequest) {
-    this.session.pendingAuthorization = {
-      ...authorizationRequest,
-      createdAt: new Date().toISOString(),
-    };
-
-    this.session.oauth = {
-      clientId: authorizationRequest.clientId,
-      redirectUri: authorizationRequest.redirectUri,
-      scope: authorizationRequest.scopeText,
-    };
-
-    await this.saveSession();
+    await this.localSession.savePendingAuthorization(authorizationRequest);
   }
 
   async #tokenRequest(body) {
-    const response = await this.#fetchWithRetries(this.tokenUrl, {
+    const response = await fetchWithRetries(this.tokenUrl, {
       method: "POST",
       headers: {
         "content-type": "application/x-www-form-urlencoded",
@@ -566,6 +306,13 @@ export class WhoopClient {
         "user-agent": this.userAgent,
       },
       body: new URLSearchParams(body).toString(),
+    }, {
+      fetchImpl: this.fetch,
+      sleepImpl: this.sleep,
+      random: this.random,
+      maxRetries: this.maxRetries,
+      retryBaseDelayMs: this.retryBaseDelayMs,
+      maxRetryDelayMs: this.maxRetryDelayMs,
     });
 
     const raw = await response.text();
@@ -599,7 +346,7 @@ export class WhoopClient {
     const normalizedCode = String(code ?? "").trim();
     if (!normalizedCode) throw new Error("Authorization code is required.");
 
-    const pending = this.session.pendingAuthorization;
+    const pending = this.localSession.getPendingAuthorization();
     if (pending?.state && state && ensureStateFormat(state) !== pending.state) {
       throw new Error("Provided --state does not match pending authorization state.");
     }
@@ -622,23 +369,22 @@ export class WhoopClient {
 
     const normalizedToken = normalizeTokenPayload(
       tokenPayload,
-      pending?.scopeText ?? this.session.oauth?.scope,
+      pending?.scopeText ?? this.localSession.getOAuth()?.scope,
     );
 
-    this.session.tokens = normalizedToken;
-    this.session.pendingAuthorization = null;
-    this.session.oauth = {
+    await this.localSession.saveTokens(normalizedToken, {
       clientId,
       redirectUri,
       scope: normalizedToken.scope,
-    };
-    await this.saveSession();
+    });
 
     return this.#buildTokenSummary(normalizedToken, { refreshed: true });
   }
 
   async #refreshAccessTokenInternal() {
-    const refreshToken = this.session.tokens?.refresh_token;
+    const currentToken = this.localSession.getToken();
+    const currentOAuth = this.localSession.getOAuth();
+    const refreshToken = currentToken?.refresh_token;
     if (!refreshToken) {
       throw new Error(
         "No refresh token in session. Re-run login and request offline scope before refreshing.",
@@ -652,41 +398,37 @@ export class WhoopClient {
       refresh_token: refreshToken,
       client_id: clientId,
       client_secret: clientSecret,
-      scope: this.session.tokens?.scope ?? this.session.oauth?.scope ?? undefined,
+      scope: currentToken?.scope ?? currentOAuth?.scope ?? undefined,
     });
 
     const normalizedToken = normalizeTokenPayload(
       tokenPayload,
-      this.session.tokens?.scope ?? this.session.oauth?.scope,
+      currentToken?.scope ?? currentOAuth?.scope,
     );
 
-    this.session.tokens = normalizedToken;
-    this.session.oauth = {
+    await this.localSession.saveTokens(normalizedToken, {
       clientId,
       redirectUri: this.#resolveRedirectUri(),
       scope: normalizedToken.scope,
-    };
-    await this.saveSession();
+      clearPendingAuthorization: false,
+    });
 
     return this.#buildTokenSummary(normalizedToken, { refreshed: true });
   }
 
   async #refreshAccessTokenWithLock({ force = true } = {}) {
-    const releaseLock = await this.#acquireRefreshLock();
-    try {
+    return this.localSession.withRefreshLock(async () => {
       await this.loadSession();
 
       if (!force) {
-        const current = this.session.tokens;
+        const current = this.localSession.getToken();
         if (current?.access_token && !tokenIsExpired(current)) {
           return this.#buildTokenSummary(current, { refreshed: false });
         }
       }
 
       return await this.#refreshAccessTokenInternal();
-    } finally {
-      await releaseLock();
-    }
+    });
   }
 
   async refreshAccessToken({ force = true, useLock = true } = {}) {
@@ -694,27 +436,12 @@ export class WhoopClient {
       return this.#refreshAccessTokenWithLock({ force });
     }
     if (!force) {
-      const current = this.session.tokens;
+      const current = this.localSession.getToken();
       if (current?.access_token && !tokenIsExpired(current)) {
         return this.#buildTokenSummary(current, { refreshed: false });
       }
     }
     return this.#refreshAccessTokenInternal();
-  }
-
-  async #ensureAccessToken() {
-    const token = this.session.tokens;
-    if (!token?.access_token) {
-      throw new Error(
-        "No access token found. Run whoop-query-cli login and whoop-query-cli exchange-code to authenticate.",
-      );
-    }
-
-    if (tokenIsExpired(token)) {
-      await this.refreshAccessToken({ force: false, useLock: true });
-    }
-
-    return this.session.tokens.access_token;
   }
 
   async request(pathname, {
@@ -724,88 +451,22 @@ export class WhoopClient {
     body = null,
     retryOnUnauthorized = true,
   } = {}) {
-    const accessToken = await this.#ensureAccessToken();
-    const url = new URL(`${this.developerBaseUrl}${pathname}`);
-
-    if (query && typeof query === "object") {
-      for (const [key, value] of Object.entries(query)) {
-        if (value == null || value === "") continue;
-        if (Array.isArray(value)) {
-          for (const item of value) {
-            if (item == null || item === "") continue;
-            url.searchParams.append(key, String(item));
-          }
-          continue;
-        }
-        url.searchParams.set(key, String(value));
-      }
-    }
-
-    const requestHeaders = new Headers(headers ?? {});
-    requestHeaders.set("authorization", `Bearer ${accessToken}`);
-    requestHeaders.set("accept", "application/json");
-    requestHeaders.set("user-agent", this.userAgent);
-
-    let requestBody = null;
-    if (body != null) {
-      if (typeof body === "string") {
-        requestBody = body;
-      } else {
-        requestBody = JSON.stringify(body);
-        if (!requestHeaders.has("content-type")) {
-          requestHeaders.set("content-type", "application/json");
-        }
-      }
-    }
-
-    const response = await this.#fetchWithRetries(url, {
+    return this.authenticatedRequest.request(pathname, {
       method,
-      headers: requestHeaders,
-      body: requestBody,
+      query,
+      headers,
+      body,
+      retryOnUnauthorized,
     });
-
-    const raw = await response.text();
-    let payload = raw;
-    try {
-      payload = raw ? JSON.parse(raw) : null;
-    } catch {
-      // Keep text payload.
-    }
-
-    if (
-      isLikelyAuthFailure(response.status, payload) &&
-      retryOnUnauthorized &&
-      this.session.tokens?.refresh_token
-    ) {
-      await this.refreshAccessToken({ force: true, useLock: true });
-      return this.request(pathname, { method, query, headers, body, retryOnUnauthorized: false });
-    }
-
-    if (!response.ok) {
-      const rate = extractRateLimit(response.headers);
-      const message = formatHttpError(response, payload);
-      const suffix =
-        rate?.remaining != null
-          ? ` | rateLimit remaining=${rate.remaining} reset=${rate.reset}`
-          : "";
-      throw new Error(`${message}${suffix}`);
-    }
-
-    return {
-      data: payload,
-      status: response.status,
-      headers: response.headers,
-      rateLimit: extractRateLimit(response.headers),
-    };
   }
 
   async getBasicProfile() {
-    const response = await this.request("/v2/user/profile/basic");
+    const response = await this.request(buildEndpointPath("profile"));
     return response.data;
   }
 
   async getBodyMeasurement() {
-    const response = await this.request("/v2/user/measurement/body");
+    const response = await this.request(buildEndpointPath("body"));
     return response.data;
   }
 
@@ -814,7 +475,7 @@ export class WhoopClient {
     if (!Number.isInteger(id) || id < 1) {
       throw new Error("cycleId must be a positive integer.");
     }
-    const response = await this.request(`/v2/cycle/${id}`);
+    const response = await this.request(buildEndpointPath("cycleById", { cycleId: id }));
     return response.data;
   }
 
@@ -823,14 +484,14 @@ export class WhoopClient {
     if (!Number.isInteger(id) || id < 1) {
       throw new Error("activityV1Id must be a positive integer.");
     }
-    const response = await this.request(`/v1/activity-mapping/${id}`);
+    const response = await this.request(buildEndpointPath("activityMapping", { activityV1Id: id }));
     return response.data;
   }
 
   async getSleepById(sleepId) {
     const id = String(sleepId ?? "").trim();
     if (!id) throw new Error("sleepId is required.");
-    const response = await this.request(`/v2/activity/sleep/${encodeURIComponent(id)}`);
+    const response = await this.request(buildEndpointPath("sleepById", { sleepId: id }));
     return response.data;
   }
 
@@ -840,7 +501,7 @@ export class WhoopClient {
 
     const normalizedTypes = splitScopes(types);
     const query = normalizedTypes.length > 0 ? { types: normalizedTypes } : null;
-    const response = await this.request(`/v2/activity/sleep/${encodeURIComponent(id)}/stream`, {
+    const response = await this.request(buildEndpointPath("sleepStream", { sleepId: id }), {
       query,
     });
     return response.data;
@@ -849,7 +510,7 @@ export class WhoopClient {
   async getWorkoutById(workoutId) {
     const id = String(workoutId ?? "").trim();
     if (!id) throw new Error("workoutId is required.");
-    const response = await this.request(`/v2/activity/workout/${encodeURIComponent(id)}`);
+    const response = await this.request(buildEndpointPath("workoutById", { workoutId: id }));
     return response.data;
   }
 
@@ -858,7 +519,7 @@ export class WhoopClient {
     if (!Number.isInteger(id) || id < 1) {
       throw new Error("cycleId must be a positive integer.");
     }
-    const response = await this.request(`/v2/cycle/${id}/recovery`);
+    const response = await this.request(buildEndpointPath("cycleRecovery", { cycleId: id }));
     return response.data;
   }
 
@@ -867,22 +528,16 @@ export class WhoopClient {
     if (!Number.isInteger(id) || id < 1) {
       throw new Error("cycleId must be a positive integer.");
     }
-    const response = await this.request(`/v2/cycle/${id}/sleep`);
+    const response = await this.request(buildEndpointPath("cycleSleep", { cycleId: id }));
     return response.data;
   }
 
   async getCollection(collectionName, { limit = 25, start = null, end = null, nextToken = null, allPages = false } = {}) {
-    const pathByCollection = {
-      cycles: "/v2/cycle",
-      recoveries: "/v2/recovery",
-      sleep: "/v2/activity/sleep",
-      workouts: "/v2/activity/workout",
-    };
-
-    const pathname = pathByCollection[collectionName];
-    if (!pathname) {
+    const endpoint = getCollectionEndpoint(collectionName);
+    if (!endpoint) {
       throw new Error(`Unsupported collection "${collectionName}".`);
     }
+    const pathname = buildEndpointPath(endpoint);
 
     const records = [];
     let currentToken = nextToken ?? null;
@@ -924,7 +579,7 @@ export class WhoopClient {
   }
 
   async revokeAccess() {
-    await this.request("/v2/user/access", { method: "DELETE" });
+    await this.request(buildEndpointPath("revokeAccess"), { method: "DELETE" });
     return true;
   }
 }

@@ -15,6 +15,13 @@ function createSyntheticRegistry(handler = async () => "ok") {
         name: "workouts",
         summary: "List workouts.",
         agentFilters: true,
+        endpoint: {
+          key: "workout.collection",
+          method: "GET",
+          path: "/v2/activity/workout",
+          scope: "read:workout",
+          coverageGroup: "collections",
+        },
         usage: ["demo-cli workouts [--days <n>] [--json]"],
         options: [
           defineOption("--days <n>", "Window length.", { type: "integer", min: 1 }),
@@ -109,10 +116,12 @@ test("registry formats help, discovery, and suggestions through one interface", 
   assert.equal(helpPayload.command, "workouts");
   assert.equal(helpPayload.supportsAgentFilters, true);
   assert.equal(helpPayload.options[0].name, "days");
+  assert.equal(helpPayload.endpoints[0].path, "/v2/activity/workout");
 
   const discovery = registry.buildDiscoveryPayload(3, "workouts");
   assert.equal(discovery.commandCount, 1);
   assert.equal(discovery.commands[0].name, "workouts");
+  assert.equal(discovery.commands[0].endpoints[0].scope, "read:workout");
   assert.equal(discovery.commands[0].agentFilters[0].name, "from");
   assert.equal(discovery.agentPatterns[0].pattern, "Recent workouts");
 
